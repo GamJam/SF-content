@@ -1,0 +1,40 @@
+newmtl Interior1Mtl
+Ka 1 1 1
+Kd 1 1 1
+Ks 0 0 0
+d 1
+illum 1
+map_Kd Interior1_diff.png
+
+newmtl Interior21Mtl
+Ka 1 1 1
+Kd 1 1 1
+Ks 0 0 0
+d 1
+illum 1
+map_Kd Interior21_diff.png
+
+newmtl InteriorParts1Mtl
+Ka 1 1 1
+Kd 1 1 1
+Ks 0 0 0
+d 1
+illum 1
+map_Kd InteriorParts1_diff.png
+
+newmtl Glass1Mtl
+Ka 1 1 1
+Kd 1 1 1
+Ks 0 0 0
+d 1
+illum 1
+map_Kd Glass1_diff.png
+
+newmtl FrontHatchs1Mtl
+Ka 1 1 1
+Kd 1 1 1
+Ks 0 0 0
+d 1
+illum 1
+map_Kd FrontHatchs1_diff.png
+
