@@ -1,5 +1,5 @@
-    { kind = "static", mesh = "body", mat = 1, pos = Vector(0, 0, 0), r = 506 },   -- 1
-    { kind = "glass", mesh = "glass", mat = 2, pos = Vector(0, 0, 0), r = 238 },   -- 2
+    { kind = "static", mesh = "body", mat = 1, pos = Vector(0, 0, 90), r = 480 },   -- 1
+    { kind = "glass", mesh = "glass", mat = 2, pos = Vector(0, 0, 90), r = 239 },   -- 2
     { kind = "rotor", mesh = "rotor", mat = 1, pos = Vector(5.14, 0, 161.76), r = 344, axis = Vector(0, 0, 1), dir = -1 },   -- 3
     { kind = "rotorfast", mesh = "rotor_hub", mat = 1, pos = Vector(5.14, 0, 161.76), r = 54, axis = Vector(0, 0, 1), dir = -1 },   -- 4
     { kind = "rotorfast", mesh = "rotor_disc", mat = 3, pos = Vector(5.14, 0, 161.76), r = 356, axis = Vector(0, 0, 1), dir = -1 },   -- 5

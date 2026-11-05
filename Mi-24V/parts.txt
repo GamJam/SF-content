@@ -1,5 +1,5 @@
-body static 1 0.0 0.0 0.0 0 | 
-glass glass 2 0.0 0.0 0.0 0 | 
+body static 1 0.0 0.0 90.0 0 | 
+glass glass 2 0.0 0.0 90.0 0 | 
 rotor rotor 1 5.144396405937295 -1.2468327002634894E-5 161.76031494140625 0 | axis = Vector(0, 0, 1), dir = -1
 rotor_hub rotorfast 1 5.144396405937295 -1.2468327002634894E-5 161.76031494140625 0 | axis = Vector(0, 0, 1), dir = -1
 rotor_disc rotorfast 3 5.144396405937295 -1.2468327002634894E-5 161.76031494140625 0 | axis = Vector(0, 0, 1), dir = -1
