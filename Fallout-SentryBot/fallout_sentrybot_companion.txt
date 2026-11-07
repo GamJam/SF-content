@@ -1,0 +1,1438 @@
+--@name Fallout Sentry Bot (companion)
+--@author your gay uncle (gamjam)
+--@shared
+
+-- The Fallout Sentry Bot (from the "Fallout SNPCs Remastered" VJ addon) as a companion: it follows you and
+-- mows down zombies, hostile aliens and Combine near you with its gatling cannon (spin up, fire, spin down,
+-- like the SNPC), and every few seconds raises its left arm and fires a missile.
+-- Gun = a hidden Wire turret on the barrel; missiles = an HL2 rocket hologram + one reusable Wire explosive.
+-- It never shoots through you or other players, and never blows up a missile near you.
+-- It only fights enemies it has actually seen, follows your trail around corners, and turns up next to
+-- you if it gets stuck or left behind (the L4D2 Tank companion's movement).
+-- Model, animations and the SNPC's own voice lines / weapon sounds: GamJam/SF-content/Fallout-SentryBot,
+-- played on each player's game, so nobody needs the addon installed. Needs Wiremod.
+--
+-- Chat (owner only): !sentry stay / follow / home, !sentry off / on (powers down / up),
+--                    !sentry <sequence> plays an animation while it's idle, !sentry list, !sentry sounds
+
+local BASE_URL   = "https://raw.githubusercontent.com/GamJam/SF-content/main/Fallout-SentryBot/"
+local MESH_MODEL = "models/hunter/blocks/cube025x025x025.mdl"
+
+-- the model faces its -X axis: the anchor hologram is turned 180 degrees from where the bot looks
+-- (anchor-local offsets below are in model space, read from the model's attachments)
+local MUZZLE_GUN     = Vector(-53, 26.5, 52)     -- gatling barrel tip while spun up
+local MUZZLE_MISSILE = Vector(-40, -25.4, 54)    -- missile pod while the arm is raised
+local AIM_PIVOT      = Vector(-14, 0, 55)        -- roughly where the aim layers turn the upper body
+local AIM_LIMIT      = 20                         -- the model's aim layers reach +-20 degrees
+
+-- voice lines: kind -> how many files (sounds/<kind><n>.wav, mono: the repo keeps .mp3 in Git LFS, which raw.githubusercontent can't serve), loaded one at a time when spoken
+local VOICES = { idle = 15, alert = 9, combat = 19, lost = 7, kill = 13, hello = 2, boot = 2 }
+
+----------------------------------------------------------------------------------------------
+if SERVER then
+
+local ENGAGE_RANGE   = 2000     -- goes after enemies this close to you
+local LEASH_RANGE    = 2500     -- drops one that gets this far from you
+local STAND_RANGE    = 1200     -- stands and shoots at visible enemies closer than this instead of chasing
+local MEMORY         = 4        -- seconds it keeps after an enemy it can't see anymore
+local FOLLOW_DIST    = 300      -- where it shows up when it teleports back to you (behind you)
+local FOLLOW_RADIUS  = 170      -- free to stand anywhere this close to you
+local FOLLOW_SLACK   = 60
+local FIGHT_LEASH    = 650      -- while fighting it still follows you once you're this far away
+local WALK_SPEED     = 83       -- the walk / run animations' own ground speeds
+local RUN_SPEED      = 240      -- the run plays faster to match (166 u/s at normal speed)
+local RUN_ANIM_SPEED = 166.4
+local ACCEL          = 700
+local TURN_RATE      = 220      -- degrees per second
+local GRAVITY        = 900
+local STEP_HEIGHT    = 30
+local TELEPORT_DIST  = 2500
+local GUN_DAMAGE     = 6        -- per bullet
+local GUN_DELAY      = 0.05     -- seconds between bullets (the SNPC fires 33 a second at 5 damage)
+local GUN_SPREAD     = 0.035
+local GUN_TRACER     = "Tracer" -- Wire only allows its own tracer list
+local GUN_CONE       = 28       -- fires while the target is this many degrees off its nose (the aim layers cover 20)
+local SPINUP_TIME    = 1.13     -- 2hrattackspinup's "event_spin"
+local SPIN_LINGER    = 0.6      -- keeps spinning this long after losing its target
+local MISSILE_MIN    = 350
+local MISSILE_MAX    = 2000
+local MISSILE_SPEED  = 1300
+local MISSILE_TURN   = 110      -- homing, degrees per second
+local MISSILE_DAMAGE = 110
+local MISSILE_RADIUS = 200
+local MISSILE_COOLDOWN = { 6, 12 }
+local SAFE_MARGIN    = 100      -- never sets off a blast within its radius + this of you
+local UPDATE         = 0.045
+
+-- what it fights: zombies, enemy aliens and Combine, nothing else (same list as the L4D2 companions)
+local TARGET_CLASSES = {
+    npc_zombie = true, npc_zombie_torso = true, npc_fastzombie = true, npc_fastzombie_torso = true,
+    npc_poisonzombie = true, npc_zombine = true,
+    npc_headcrab = true, npc_headcrab_fast = true, npc_headcrab_black = true, npc_headcrab_poison = true,
+    npc_antlion = true, npc_antlion_worker = true, npc_antlionguard = true, npc_barnacle = true,
+    npc_combine_s = true, npc_metropolice = true, npc_manhack = true, npc_cscanner = true, npc_clawscanner = true,
+    npc_rollermine = true, npc_turret_floor = true, npc_turret_ceiling = true, npc_combine_camera = true,
+    npc_hunter = true, npc_stalker = true, npc_sniper = true, npc_strider = true, npc_helicopter = true,
+    npc_combinegunship = true, npc_combinedropship = true,
+}
+
+local GUN_MODEL       = "models/props_junk/PopCan01a.mdl"
+local EXPLOSIVE_MODEL = "models/bull/gates/logic_nano.mdl"
+local MISSILE_MODEL   = "models/weapons/w_missile_launch.mdl"
+
+local me, chipEnt = owner(), chip()
+
+local function fx(name, data) if effect.canCreate() then pcall(effect.create, name, data) end end
+local function cpuOk() return cpuUsed() < cpuMax() * 0.35 and cpuAverage() < cpuMax() * 0.55 end
+local function angDiff(a, b) return (a - b + 180) % 360 - 180 end
+local function flat(v) return Vector(v.x, v.y, 0) end
+
+local jobs = {}
+local function queue(fn) jobs[#jobs + 1] = fn end
+local function runJobs()
+    if #jobs > 0 and cpuUsed() < cpuMax() * 0.3 then
+        local ok, err = pcall(table.remove(jobs, 1))
+        if not ok then print("Sentry Bot: " .. tostring(type(err) == "table" and err.message or err)) end
+    end
+end
+
+local pos, vel = chipEnt:getPos(), Vector()
+local yaw = me:getEyeAngles().y + 180         -- where the bot looks
+local airborne = false
+local anchor, gun, gunWl, missile
+
+local function filt(a, b)
+    local f = { chipEnt }
+    for _, e in ipairs({ anchor or false, gun or false, missile or false, a or false, b or false }) do
+        if e and isValid(e) then f[#f + 1] = e end
+    end
+    return f
+end
+
+local function groundZ(p, up)
+    local tr = trace.line(p + Vector(0, 0, up or 60), p - Vector(0, 0, 600), filt(me))
+    return tr.Hit and tr.HitPos.z or nil, tr
+end
+
+do
+    local z = groundZ(pos)
+    if z then pos = Vector(pos.x, pos.y, z) end
+end
+local function anchorAng() return Angle(0, yaw + 180, 0) end
+anchor = hologram.create(pos, anchorAng(), MESH_MODEL, Vector(1))
+anchor:setNoDraw(true)
+
+-- the gatling cannon: a hidden Wire turret moved onto the barrel every update (unparented: a parented
+-- turret on a moving holo did no damage on the gunship chip)
+queue(function()
+    if not prop.canSpawn() then error("can't spawn props right now, so the gun won't hurt", 0) end
+    local ent = prop.createSent(pos + Vector(0, 0, 50), Angle(), "gmod_wire_turret", true, {
+        delay = GUN_DELAY, damage = GUN_DAMAGE, force = 5, sound = "0", numbullets = 1,
+        spread = GUN_SPREAD, tracer = GUN_TRACER, tracernum = 1, Model = GUN_MODEL,
+    })
+    pcall(ent.setSolid, ent, false)
+    ent:setNoDraw(true)
+    gun, gunWl = ent, ent:getWirelink()
+end)
+
+-- one reusable Wire explosive for the missiles (the server's explosive limit is low: never retried)
+local boom
+queue(function()
+    if not prop.canSpawn() then return end
+    local ok, e = pcall(prop.createSent, pos - Vector(0, 0, 200), Angle(), "gmod_wire_explosive", true, {
+        damage = MISSILE_DAMAGE, radius = MISSILE_RADIUS, removeafter = false, delaytime = 0, delayreloadtime = 0,
+        explodeatzero = false, bulletproof = true, explosionproof = true, Model = EXPLOSIVE_MODEL,
+    })
+    if not ok or not isValid(e) then print("Sentry Bot: no Wire explosive (limit?), so its missiles won't explode") return end
+    pcall(e.setSolid, e, false)
+    e:setNoDraw(true)
+    boom = { ent = e, wl = e:getWirelink(), ready = 0 }
+end)
+
+----------------------------------------------------------------------------------------------
+-- What the clients play: animations (from when, how fast), voice lines, the target to aim at
+
+local state = { name = "specialidle_powerup", start = timer.curtime(), rate = 1 }
+local function send(ply, name, start, rate)
+    net.start("fosb")
+    net.writeEntity(anchor)
+    net.writeString(name or state.name)
+    net.writeDouble(start or state.start)
+    net.writeFloat(rate or state.rate)
+    if ply then net.send(ply) else net.send() end
+end
+local curBase, curRate = "specialidle_powerup", 1
+local function setBase(name, rate)   -- full-body animation (mtidle, walk, run, turnleft, powerup ...)
+    rate = rate or 1
+    if curBase == name and math.abs(curRate - rate) < 0.05 then return end
+    curBase, curRate = name, rate
+    state.name, state.start, state.rate = name, timer.curtime(), rate
+    send()
+end
+local function gesture(name, start)   -- on top: 2hr* = gun arm, 2hl* = missile arm
+    send(nil, name, start or timer.curtime(), 1)
+end
+
+local voiceUntil, nextVoice = 0, {}
+local function voice(kind, force)
+    local now = timer.curtime()
+    if not force and (now < voiceUntil or now < (nextVoice[kind] or 0)) then return end
+    voiceUntil = now + 4
+    net.start("fosbVoice")
+    net.writeString(kind)
+    net.writeUInt(math.random(VOICES[kind]), 8)
+    net.writeVector(pos)
+    net.send()
+end
+
+local target
+local function sendTarget(ply)
+    net.start("fosbTarget")
+    net.writeBool(target ~= nil)
+    if target then net.writeEntity(target) end
+    if ply then net.send(ply) else net.send() end
+end
+
+local gunState = "off"
+hook.add("ClientInitialized", "fosbJoin", function(ply)
+    send(ply)
+    if gunState == "firing" then send(ply, "2hrattackspinloop", timer.curtime(), 1) end
+    sendTarget(ply)
+end)
+
+----------------------------------------------------------------------------------------------
+-- Targets: zombies, aliens, Combine near you that it can actually see
+
+local lastTarget, targetVisible, lastSeen, lastSeenPos = nil, false, 0, nil
+local targetRadius = 16
+local candidates, nextCandidates, scan, nextScan = {}, 0, nil, 0
+local ignoreTarget = {}
+local killWatch          -- { e, t }: the enemy it last hit, to say something when it dies
+
+local function eyePos() return pos + Vector(0, 0, 62) end
+local function validTarget(e) return isValid(e) and e:isNPC() and TARGET_CLASSES[e:getClass()] == true and e:getHealth() > 0 end
+
+local function canSee(e)
+    local tr = trace.line(eyePos(), e:obbCenterW(), filt(me), MASK.OPAQUE)
+    return not tr.Hit or tr.Entity == e
+end
+
+local function setTarget(e)
+    local had = target
+    target = e
+    local now = timer.curtime()
+    if target and target ~= lastTarget then
+        lastSeen, lastSeenPos, targetVisible = now, target:getPos(), true
+        local s = target:obbSize()
+        targetRadius = math.max(s.x, s.y) / 2
+        if not had then voice("alert") nextVoice.combat = now + 6 end
+    elseif not target then
+        targetVisible, lastSeenPos = false, nil
+    end
+    if target ~= lastTarget then sendTarget() end
+    lastTarget = target
+end
+
+local function scanStep(now)
+    if not cpuOk() then return end
+    local center = me:getPos()
+    if not scan then
+        if now < nextScan then return end
+        nextScan = now + 0.2
+        if validTarget(target) and target:getPos():getDistanceSqr(center) <= LEASH_RANGE * LEASH_RANGE then
+            targetVisible = canSee(target)
+            if targetVisible then lastSeen, lastSeenPos = now, target:getPos()
+            elseif now - lastSeen > MEMORY then setTarget(nil) voice("lost") end
+        elseif target then
+            setTarget(nil)
+        end
+        if now >= nextCandidates then
+            nextCandidates = now + 2
+            candidates = find.byClass("npc_*")
+            return
+        end
+        scan = { i = 1, found = {} }
+    end
+    local n = 0
+    while scan.i <= #candidates and n < 6 and cpuOk() do
+        local e = candidates[scan.i]
+        scan.i, n = scan.i + 1, n + 1
+        if validTarget(e) and not (ignoreTarget[e] and now < ignoreTarget[e]) then
+            local ep = e:getPos()
+            if ep:getDistanceSqr(center) <= ENGAGE_RANGE * ENGAGE_RANGE then
+                scan.found[#scan.found + 1] = { e = e, d = ep:getDistanceSqr(pos) }
+            end
+        end
+    end
+    if scan.i <= #candidates then return end
+    if not scan.j then
+        table.sort(scan.found, function(a, b) return a.d < b.d end)
+        scan.j = 1
+        return
+    end
+    local t = 0
+    while scan.j <= #scan.found and t < 2 and cpuOk() do
+        local c = scan.found[scan.j]
+        scan.j = scan.j + 1
+        if validTarget(c.e) then
+            t = t + 1
+            if (c.e == target and targetVisible) or canSee(c.e) then
+                if not validTarget(target) or (c.e ~= target and (not targetVisible or c.d < target:getPos():getDistanceSqr(pos) * 0.5)) then
+                    setTarget(c.e)
+                end
+                scan = nil
+                return
+            end
+        end
+    end
+    if scan.j > #scan.found then scan = nil end
+end
+
+----------------------------------------------------------------------------------------------
+-- The gatling cannon: spin up, fire while it has a clear shot, spin down (the SNPC's order)
+
+local gunT, lastGood = 0, 0
+local powered = true
+
+local function aimPoint(e)
+    return e:obbCenterW() + e:getVelocity() * 0.08
+end
+
+-- nothing but the target (or the world behind it) in the line of fire: never through players
+local function clearShot(from, to)
+    local tr = trace.line(from, to, filt(), MASK.SHOT)
+    if not tr.Hit or tr.Entity == target then return true end
+    local e = tr.Entity
+    if isValid(e) then
+        return e:isNPC() and TARGET_CLASSES[e:getClass()] == true    -- another enemy in the way is fine; players, friends, props aren't
+    end
+    return tr.HitPos:getDistance(to) < 40                           -- the ground at its feet is fine; a wall isn't
+end
+
+local function setFire(on)
+    if gunWl then pcall(function() gunWl["Fire"] = on and 1 or 0 end) end
+end
+
+local function updateGun(now)
+    local has = powered and validTarget(target) and targetVisible and target:getPos():getDistance(pos) <= ENGAGE_RANGE
+    local off = math.abs(has and angDiff((target:getPos() - pos):getAngle().y, yaw) or 180)
+    if has and off < 70 then lastGood = now end
+    if gunState == "off" then
+        if has and off < 70 and now >= gunT then
+            gunState, gunT = "spinup", now
+            gesture("2hrattackspinup", now)
+        end
+    elseif gunState == "spinup" then
+        if now - gunT >= SPINUP_TIME then
+            gunState = "firing"
+            gesture("2hrattackspinloop", gunT + SPINUP_TIME)
+        end
+    elseif gunState == "firing" then
+        if now - lastGood > SPIN_LINGER or not powered then
+            gunState, gunT = "off", now + 0.8
+            setFire(false)
+            gesture("2hrattackspindown", now)
+            return
+        end
+    end
+    if gunState ~= "firing" or not isValid(gun) then setFire(false) return end
+    -- keep the turret on the barrel, pointed at the target
+    if not has or off > GUN_CONE then setFire(false) return end
+    local tp = aimPoint(target)
+    local from = anchor:localToWorld(MUZZLE_GUN)
+    local pitch = math.clamp(-(tp - from):getAngle().p, -AIM_LIMIT, AIM_LIMIT)   -- the client tilts the gun this much
+    from = from + Vector(0, 0, pitch * 0.9)
+    gun:setPos(from)
+    gun:setAngles((tp - from):getAngle())
+    local ok = clearShot(from, tp)
+    setFire(ok)
+    if ok then killWatch = { e = target, t = now } end
+end
+
+----------------------------------------------------------------------------------------------
+-- Missiles: raise the arm (2hlequip), fire (2hlattackleft), lower it (2hlunequip)
+
+local nextMissile = timer.curtime() + 4
+local launch          -- { t }: the arm sequence in progress
+local flying          -- { pos, vel, t, target }
+
+local EQUIP_TIME, ATTACK_TIME = 1.2, 1.2
+
+local function explodeAt(p)
+    local b = boom
+    if not b or not isValid(b.ent) or timer.curtime() < b.ready then return false end
+    if p:getDistance(me:getPos()) < MISSILE_RADIUS + SAFE_MARGIN then return false end
+    b.ent:setPos(p)
+    pcall(function() b.wl["Detonate"] = 0 b.wl["Detonate"] = 1 end)
+    b.ready = timer.curtime() + 0.5
+    return true
+end
+
+local function fireMissile(now)
+    local from = anchor:localToWorld(MUZZLE_MISSILE)
+    local aim = validTarget(target) and aimPoint(target) or (from + Angle(0, yaw, 0):getForward() * 1000)
+    local dir = (aim - from):getNormalized()
+    local ok, h = pcall(hologram.create, from, dir:getAngle(), MISSILE_MODEL, Vector(1))
+    if not ok or not h then return end
+    missile = h
+    pcall(h.setTrails, h, 10, 0, 0.7, "trails/smoke", Color(210, 210, 210, 160), nil, false)
+    pcall(h.emitSound, h, "weapons/rpg/rocket1.wav", 80)
+    flying = { pos = from, vel = dir * MISSILE_SPEED, t = now, target = target }
+    if validTarget(target) then killWatch = { e = target, t = now + 1.5 } end
+end
+
+local function updateLaunch(now)
+    if not launch then
+        if not powered or airborne or now < nextMissile or flying or not validTarget(target) or not targetVisible then return end
+        local tp = target:getPos()
+        local d = tp:getDistance(pos)
+        if d < MISSILE_MIN or d > MISSILE_MAX then return end
+        if tp:getDistance(me:getPos()) < MISSILE_RADIUS + SAFE_MARGIN + 50 then return end      -- too close to you
+        if math.abs(angDiff((tp - pos):getAngle().y, yaw)) > 30 then return end
+        launch = { t = now, fired = false }
+        gesture("2hlequip", now)
+        return
+    end
+    local el = now - launch.t
+    if not launch.fired and el >= EQUIP_TIME then
+        launch.fired = true
+        gesture("2hlattackleft", launch.t + EQUIP_TIME)          -- "event_firemissile" is on its first frame
+        fireMissile(now)
+    end
+    if launch.fired and not launch.down and el >= EQUIP_TIME + ATTACK_TIME then
+        launch.down = true
+        gesture("2hlunequip", launch.t + EQUIP_TIME + ATTACK_TIME)
+    end
+    if el >= EQUIP_TIME * 2 + ATTACK_TIME then
+        launch = nil
+        nextMissile = now + MISSILE_COOLDOWN[1] + math.random() * (MISSILE_COOLDOWN[2] - MISSILE_COOLDOWN[1])
+    end
+end
+
+local function updateMissile(now, dt)
+    if not flying then return end
+    if not isValid(missile) then flying = nil return end
+    local f = flying
+    -- gentle homing on the target it was fired at
+    if validTarget(f.target) then
+        local want = (aimPoint(f.target) - f.pos):getNormalized()
+        local cur = f.vel:getNormalized()
+        local ang = math.deg(math.acos(math.clamp(cur:dot(want), -1, 1)))
+        local maxA = MISSILE_TURN * dt
+        if ang > 0.01 then
+            local t = math.min(1, maxA / ang)
+            f.vel = (cur * (1 - t) + want * t):getNormalized() * MISSILE_SPEED
+        end
+    end
+    local np = f.pos + f.vel * dt
+    local tr = trace.line(f.pos, np, filt(), MASK.SHOT)
+    if tr.Hit or now - f.t > 4 then
+        local hit = tr.Hit and tr.HitPos or np
+        if not explodeAt(hit) then fx("ManhackSparks", { origin = hit, normal = Vector(0, 0, 1) }) end
+        pcall(missile.stopSound, missile, "weapons/rpg/rocket1.wav")
+        missile:remove()
+        missile, flying = nil, nil
+        return
+    end
+    f.pos = np
+    missile:setPos(np)
+    missile:setAngles(f.vel:getAngle())
+end
+
+----------------------------------------------------------------------------------------------
+-- Moving (the L4D2 companions' way): your trail around corners, whiskers around walls, hops over
+-- things, and back to you when stuck
+
+local NAV_MASK = MASK.NPCSOLID_BRUSHONLY
+local NAV_MIN, NAV_MAX = Vector(-22, -22, 0), Vector(22, 22, 30)
+local NAV_UP = Vector(0, 0, STEP_HEIGHT + 4)
+local CRUMB_GAP, CRUMB_COUNT = 64, 80
+local WHISKERS = { 30, -30, 60, -60, 95, -95, 135, -135 }
+
+local mode = "follow"
+local stayPos
+local crumbs = {}
+local nav = { t = 0, dir = nil, side = 1, crumb = nil, losT = 0, los = true, probe = nil }
+local progress = { t = 0, p = nil, stuck = 0 }
+local busyUntil = timer.curtime() + 3.1      -- powering up
+
+local function clearLine(a, b)
+    local tr = trace.hull(a + NAV_UP, b + NAV_UP, NAV_MIN, NAV_MAX, nil, NAV_MASK)
+    return (not tr.Hit) or tr.StartSolid
+end
+
+timer.create("fosbCrumbs", 0.15, 0, function()
+    if not isValid(me) or not me:isOnGround() then return end
+    local p = me:getPos()
+    local last = crumbs[#crumbs]
+    if last and last:getDistanceSqr(p) < CRUMB_GAP * CRUMB_GAP then return end
+    if last and last:getDistanceSqr(p) > 600 * 600 then crumbs = {} nav.crumb, nav.probe = nil, nil end
+    crumbs[#crumbs + 1] = p
+    if #crumbs > CRUMB_COUNT then
+        table.remove(crumbs, 1)
+        if nav.crumb then nav.crumb = math.max(1, nav.crumb - 1) end
+        if nav.probe then nav.probe = nav.probe - 1 end
+    end
+end)
+
+local function teleportHome()
+    local mp = me:getPos()
+    local spot = mp - Angle(0, me:getEyeAngles().y, 0):getForward() * FOLLOW_DIST
+    if not clearLine(mp, spot) then
+        spot = mp
+        for i = #crumbs, 1, -1 do
+            if crumbs[i]:getDistance(mp) > 90 then spot = crumbs[i] break end
+        end
+    end
+    local z = groundZ(spot, 80)
+    pos = Vector(spot.x, spot.y, z or mp.z)
+    vel, airborne = Vector(), false
+    nav.crumb, nav.probe, nav.dir = nil, nil, nil
+    progress.p, progress.stuck = nil, 0
+    fx("ManhackSparks", { origin = pos + Vector(0, 0, 40), normal = Vector(0, 0, 1) })
+end
+
+local function startLeap(dest)
+    local t = math.clamp(pos:getDistance(dest) / 600, 0.6, 1.2)
+    local d = dest - pos
+    vel = Vector(d.x / t, d.y / t, d.z / t + 0.5 * GRAVITY * t)
+    airborne = true
+    setBase("mtidle")
+end
+
+local function land(now)
+    airborne = false
+    vel = Vector(vel.x, vel.y, 0) * 0.2
+    fx("ThumperDust", { origin = pos, scale = 60 })
+    progress.p, progress.t = nil, now
+end
+
+local function tryHop(dir)
+    local up = pos + Vector(0, 0, 130)
+    local over = up + dir * 200
+    if trace.hull(pos + NAV_UP, up, NAV_MIN, NAV_MAX, nil, NAV_MASK).Hit then return false end
+    if trace.hull(up, over, NAV_MIN, NAV_MAX, nil, NAV_MASK).Hit then return false end
+    local down = trace.line(over, over - Vector(0, 0, 500), nil, NAV_MASK)
+    if not down.Hit or down.StartSolid or down.HitNormal.z < 0.6 then return false end
+    startLeap(down.HitPos)
+    return true
+end
+
+local function pickWaypoint(now, goal, following)
+    if now >= nav.losT then
+        nav.losT = now + 0.25
+        nav.los = clearLine(pos, goal)
+        if nav.los then nav.crumb, nav.probe = nil, nil end
+    end
+    if nav.los or not following or #crumbs == 0 then return goal end
+    if nav.crumb and crumbs[nav.crumb] then
+        local c = crumbs[nav.crumb]
+        if Vector(c.x - pos.x, c.y - pos.y, 0):getLength() < 50 and nav.crumb < #crumbs then nav.crumb = nav.crumb + 1 end
+        return crumbs[nav.crumb]
+    end
+    nav.probe = nav.probe or #crumbs
+    for _ = 1, 2 do
+        if nav.probe < 1 then nav.probe = nil break end
+        local c = crumbs[nav.probe]
+        if c and clearLine(pos, c) then
+            nav.crumb, nav.probe = nav.probe, nil
+            return c
+        end
+        nav.probe = nav.probe - 1
+    end
+    return goal
+end
+
+local function steer(now, wantDir, speed)
+    if now < nav.t then return nav.dir end
+    if not cpuOk() then return nav.dir or wantDir end
+    nav.t = now + 0.1
+    local look = math.max(48, speed * 0.35)
+    if clearLine(pos, pos + wantDir * look) then nav.dir = wantDir return wantDir end
+    local base = wantDir:getAngle().y
+    for i = 1, #WHISKERS do
+        local d = Angle(0, base + WHISKERS[i] * nav.side, 0):getForward()
+        if clearLine(pos, pos + d * look) then nav.dir = d return d end
+        if i >= 4 and not cpuOk() then break end
+    end
+    nav.side = -nav.side
+    nav.dir = nil
+    return nil
+end
+
+local lastYaw = yaw
+local function move(now, dt)
+    local mp = me:getPos()
+    if mode ~= "stay" and mp:getDistance(pos) > TELEPORT_DIST then teleportHome() return end
+
+    local hunting = validTarget(target)
+    local goal, speed, stopDist, following
+    local function followGoal()
+        local d = pos:getDistance(mp)
+        if d > FOLLOW_RADIUS then nav.catchUp = true elseif d < FOLLOW_RADIUS - FOLLOW_SLACK then nav.catchUp = false end
+        if nav.catchUp then return mp, math.max(80, FOLLOW_RADIUS - FOLLOW_SLACK) end
+        return pos, 1e9
+    end
+    if not powered or now < busyUntil then
+        goal, stopDist, speed = pos, 1e9, WALK_SPEED
+    elseif mode == "stay" and stayPos then
+        goal, stopDist = stayPos, 40
+        speed = pos:getDistance(goal) > 400 and RUN_SPEED or WALK_SPEED
+    elseif hunting and targetVisible and target:getPos():getDistance(pos) <= STAND_RANGE and pos:getDistance(mp) < FIGHT_LEASH then
+        goal, stopDist, speed = pos, 1e9, RUN_SPEED                        -- in range: plant and shoot
+    elseif hunting and pos:getDistance(mp) < FIGHT_LEASH then
+        -- out of sight or range: to where it last saw it
+        goal = (targetVisible or not lastSeenPos) and target:getPos() or lastSeenPos
+        speed, stopDist = RUN_SPEED, targetVisible and STAND_RANGE * 0.8 or 40
+    else
+        goal, stopDist = followGoal()
+        speed, following = RUN_SPEED, true
+    end
+
+    if airborne then
+        local nv = vel - Vector(0, 0, GRAVITY * dt)
+        local np = pos + (vel + nv) * 0.5 * dt
+        local tr = trace.hull(pos + Vector(0, 0, 10), np + Vector(0, 0, 10), Vector(-22, -22, 0), Vector(22, 22, 40), nil, NAV_MASK)
+        vel = nv
+        if tr.Hit and not tr.StartSolid then
+            if tr.HitNormal.z > 0.5 then pos = tr.HitPos - Vector(0, 0, 10) land(now)
+            elseif tr.HitNormal.z < -0.5 then vel = Vector(vel.x, vel.y, math.min(vel.z, 0)) pos = tr.HitPos - Vector(0, 0, 10)
+            else vel = Vector(0, 0, math.min(vel.z, 0)) pos = tr.HitPos - Vector(0, 0, 10) + tr.HitNormal * 2 end
+        else
+            pos = np
+        end
+        if pos.z < mp.z - 4000 then teleportHome() end
+        return
+    end
+
+    local d = flat(goal - pos)
+    local dist = d:getLength()
+    local want = Vector()
+    if dist > stopDist then
+        local wp = pickWaypoint(now, goal, following and mode ~= "stay")
+        local wd = flat(wp - pos)
+        if wd:getLength() < 1 then wd = d end
+        local dir = steer(now, wd:getNormalized(), speed)
+        if dir then
+            if dist > 450 or speed == RUN_SPEED and dist > 200 then want = dir * speed else want = dir * math.min(speed, WALK_SPEED * 1.3) end
+            if dist < stopDist + 80 then want = want * math.max(0.25, (dist - stopDist) / 80) end
+        end
+    end
+    local dv = want - vel
+    local maxDv = ACCEL * dt
+    if dv:getLength() > maxDv then dv = dv:getNormalized() * maxDv end
+    vel = flat(vel + dv)
+
+    if dist <= stopDist + 30 then
+        progress.p, progress.stuck = nil, 0
+    elseif now >= progress.t then
+        progress.t = now + 1
+        if progress.p and progress.p:getDistance(pos) < 40 then
+            progress.stuck = progress.stuck + 1
+            nav.side = -nav.side
+            nav.crumb, nav.probe = nil, nil
+            if progress.stuck <= 2 then
+                tryHop(d:getNormalized())
+            elseif hunting and not following then
+                ignoreTarget[target] = now + 8
+                setTarget(nil)
+                progress.stuck = 0
+            elseif progress.stuck >= 4 then
+                teleportHome()
+            end
+        else
+            progress.stuck = 0
+        end
+        progress.p = pos
+    end
+
+    local step = vel * dt
+    if step:getLength() > 0.1 then
+        local np = pos + step
+        local z, gtr = groundZ(np, STEP_HEIGHT)
+        if gtr and gtr.StartSolid then
+            local tr = trace.line(np + Vector(0, 0, STEP_HEIGHT), np - Vector(0, 0, 600), nil, NAV_MASK)
+            z = tr.Hit and tr.HitPos.z or nil
+        end
+        if z == nil or z < pos.z - 200 then
+            pos, airborne = np, true
+        elseif z > pos.z + STEP_HEIGHT + 8 then
+            vel = vel * 0.3
+        else
+            pos = Vector(np.x, np.y, z)
+        end
+    end
+
+    -- facing: a visible target first (the gun only covers its front), else where it walks, else your way
+    local wantYaw = yaw
+    if powered and hunting and targetVisible and (vel:getLength() < 60 or target:getPos():getDistance(pos) < 900) then
+        wantYaw = (target:getPos() - pos):getAngle().y
+    elseif vel:getLength() > 30 then
+        wantYaw = vel:getAngle().y
+    elseif dist < stopDist + 20 and powered then
+        wantYaw = me:getEyeAngles().y
+    end
+    local s = TURN_RATE * dt
+    yaw = yaw + math.clamp(angDiff(wantYaw, yaw), -s, s)
+    local turnRate = angDiff(yaw, lastYaw) / math.max(dt, 0.001)
+    lastYaw = yaw
+
+    -- the full-body animation that goes with it
+    if powered and now >= busyUntil then
+        local sp = vel:getLength()
+        if sp > 125 then setBase("run", math.clamp(sp / RUN_ANIM_SPEED, 0.8, 1.6))
+        elseif sp > 20 then setBase("walk", math.clamp(sp / WALK_SPEED, 0.6, 1.5))
+        elseif turnRate > 60 then setBase("turnleft")
+        elseif turnRate < -60 then setBase("turnright")
+        elseif curBase == "run" or curBase == "walk" or curBase == "turnleft" or curBase == "turnright"
+            or curBase == "specialidle_powerup" or curBase == "specialidle_powerdown" or not curBase then
+            setBase("mtidle")    -- (an emote from chat keeps playing until it moves)
+        end
+    end
+end
+
+----------------------------------------------------------------------------------------------
+-- Chatter: idle lines now and then, combat lines while shooting, a line when an enemy it shot dies,
+-- hello when you come back to it
+
+local nextIdleLine = timer.curtime() + 25
+local ownerFar, nextHello = false, 0
+local function chatter(now)
+    if killWatch and now - killWatch.t < 2.5 and (not isValid(killWatch.e) or killWatch.e:getHealth() <= 0) then
+        killWatch = nil
+        voice("kill")
+        nextIdleLine = now + 20
+        return
+    end
+    if killWatch and now - killWatch.t >= 2.5 then killWatch = nil end
+    if not powered then return end
+    if validTarget(target) then
+        if gunState == "firing" and now >= (nextVoice.combat or 0) then
+            voice("combat")
+            nextVoice.combat = now + 7 + math.random() * 6
+        end
+        nextIdleLine = math.max(nextIdleLine, now + 15)
+        return
+    end
+    local d = me:getPos():getDistance(pos)
+    if d > 700 then ownerFar = true
+    elseif ownerFar and d < 200 and now >= nextHello then
+        ownerFar, nextHello = false, now + 30
+        voice("hello")
+        return
+    end
+    if now >= nextIdleLine then
+        nextIdleLine = now + 25 + math.random() * 25
+        voice("idle")
+    end
+end
+
+local function powerUp()
+    powered = true
+    busyUntil = timer.curtime() + 3.1
+    curBase = nil
+    setBase("specialidle_powerup")
+    voice("boot", true)
+end
+local function powerDown()
+    powered = false
+    setTarget(nil)
+    if gunState ~= "off" then gunState = "off" setFire(false) gesture("2hrattackspindown") end
+    vel = Vector()
+    curBase = nil
+    setBase("specialidle_powerdown")
+end
+
+timer.simple(1.5, function() voice("boot", true) end)
+
+local lastUpdate = timer.curtime()
+hook.add("think", "fosbCompanion", function()
+    runJobs()
+    local now = timer.curtime()
+    local dt = now - lastUpdate
+    if dt < UPDATE then return end
+    if cpuAverage() > cpuMax() * 0.7 then return end
+    lastUpdate = now
+    dt = math.min(dt, 0.2)
+    if not isValid(me) or not isValid(anchor) then return end
+    if not me:isAlive() then setFire(false) return end
+    if powered then scanStep(now) end
+    move(now, dt)
+    updateGun(now)
+    updateLaunch(now)
+    updateMissile(now, dt)
+    chatter(now)
+    anchor:setPos(pos)
+    anchor:setAngles(anchorAng())
+end)
+
+hook.add("PlayerSay", "fosbChat", function(ply, text)
+    if ply ~= me then return end
+    if string.lower(string.sub(text, 1, 7)) ~= "!sentry" then return end
+    local cmd = string.match(string.sub(text, 1, 80), "^!sentry%s*(%S*)")
+    if not cmd then return end
+    cmd = string.lower(cmd)
+    if cmd == "" or cmd == "help" then net.start("fosbHelp") net.send(me)
+    elseif cmd == "list" then net.start("fosbList") net.send(me)
+    elseif cmd == "sounds" then net.start("fosbSndTest") net.send(me)
+    elseif cmd == "stay" then mode, stayPos = "stay", pos print("Sentry Bot: holding here (still fights enemies near you)")
+    elseif cmd == "follow" then mode = "follow" print("Sentry Bot: following you")
+    elseif cmd == "home" then mode = "follow" setTarget(nil) teleportHome() print("Sentry Bot: back to you")
+    elseif cmd == "off" then if powered then powerDown() print("Sentry Bot: powered down") end
+    elseif cmd == "on" then if not powered then powerUp() print("Sentry Bot: powering up") end
+    elseif powered and not target and not airborne and vel:getLength() < 20 and timer.curtime() >= busyUntil then
+        -- an emote: plays until it moves again
+        curBase = cmd
+        state.name, state.start, state.rate = cmd, timer.curtime(), 1
+        send()
+    end
+    return ""
+end)
+
+return
+end
+
+----------------------------------------------------------------------------------------------
+-- CLIENT
+
+local LOAD_CPU    = 0.25
+local LOAD_AVG    = 0.4
+local UPDATE_RATE = 30
+
+local function say(msg) if player() == owner() then print("[Sentry Bot] " .. msg) end end
+local function errText(err) return type(err) == "table" and tostring(err.message) or tostring(err) end
+
+-- skeleton, pieces, animations and sequences from sentrybot.txt (indices made 1-based)
+local NB = 0
+local PARENT, REST_P, REST_Q, P2B = {}, {}, {}, {}
+local PIECES, ANIMS, SEQS, SEQ_BY_NAME, ANIM_BY_NAME = {}, {}, {}, {}, {}
+local BIN
+local MESHES
+
+local function parseData(body)
+    local lines = string.explode("\n", body)
+    local anim, seq
+    for li, line in ipairs(lines) do
+        local t = string.explode(" ", line)
+        local k = t[1]
+        if k == "tank" then
+            if tonumber(t[2]) ~= 1 then error("sentrybot.txt is a newer format than this chip", 0) end
+            NB = tonumber(t[3])
+        elseif k == "bone" then
+            local b = tonumber(t[2]) + 1
+            PARENT[b] = tonumber(t[3]) + 1
+            for c = 1, 3 do REST_P[b * 3 - 3 + c] = tonumber(t[4 + c]) end
+            for c = 1, 4 do REST_Q[b * 4 - 4 + c] = tonumber(t[7 + c]) end
+            for c = 1, 12 do P2B[b * 12 - 12 + c] = tonumber(t[11 + c]) end
+        elseif k == "piece" then
+            local pc = { obj = t[3], bones = {}, w = {} }
+            for i = 1, tonumber(t[5]) do pc.bones[i] = tonumber(t[4 + i * 2]) + 1; pc.w[i] = tonumber(t[5 + i * 2]) end
+            PIECES[#PIECES + 1] = pc
+        elseif k == "anim" then
+            local flags = tonumber(t[6])
+            anim = { name = t[3], fps = tonumber(t[4]), frames = tonumber(t[5]), loop = flags % 2 == 1, delta = flags % 8 >= 4,
+                     off = tonumber(t[7]), bpf = tonumber(t[8]), ar = {}, ap = {}, cr = {}, cp = {} }
+            ANIMS[tonumber(t[2]) + 1] = anim
+            ANIM_BY_NAME[string.lower(anim.name)] = anim
+        elseif k == "ar" then
+            for i = 2, #t do anim.ar[#anim.ar + 1] = tonumber(t[i]) + 1 end
+        elseif k == "ap" then
+            for i = 2, #t do anim.ap[#anim.ap + 1] = tonumber(t[i]) + 1 end
+        elseif k == "cr" then
+            anim.cr[#anim.cr + 1] = { tonumber(t[2]) + 1, tonumber(t[3]), tonumber(t[4]), tonumber(t[5]), tonumber(t[6]) }
+        elseif k == "cp" then
+            anim.cp[#anim.cp + 1] = { tonumber(t[2]) + 1, tonumber(t[3]), tonumber(t[4]), tonumber(t[5]) }
+        elseif k == "seq" then
+            seq = { name = t[3], act = t[4], flags = tonumber(t[5]), fadein = tonumber(t[14]), anims = {}, al = {} }
+            for i = 16, #t do seq.anims[#seq.anims + 1] = tonumber(t[i]) + 1 end
+            SEQS[tonumber(t[2]) + 1] = seq
+            SEQ_BY_NAME[string.lower(seq.name)] = seq
+        elseif k == "al" then
+            seq.al[#seq.al + 1] = { seq = tonumber(t[2]) + 1, start = tonumber(t[5]), peak = tonumber(t[6]), tail = tonumber(t[7]), stop = tonumber(t[8]) }
+        elseif k == "sw" then
+            seq.sw = {}
+            for i = 2, #t do seq.sw[i - 1] = tonumber(t[i]) end
+        end
+        if li % 40 == 0 and cpuUsed() > cpuMax() * LOAD_CPU then coroutine.yield() end
+    end
+    if NB == 0 or #PIECES == 0 then error("sentrybot.txt looks broken", 0) end
+    for _, s in ipairs(SEQS) do
+        s.anim = ANIMS[s.anims[1]]
+        local lname = string.lower(s.name)
+        s.skip = string.sub(lname, 1, 5) == "auto_"                     -- the aim layers, applied by hand below
+        s.loop = s.flags % 2 == 1 or lname == "mtidle"                 -- the idle isn't flagged looping in the model
+        s.overlay = s.sw ~= nil or (s.anim ~= nil and s.anim.delta)
+        s.slot = string.sub(lname, 1, 3) == "2hl" and "L" or "R"          -- left arm = missiles, right arm = gun
+        s.hold = lname == "specialidle_powerdown"
+        local a = s.anim
+        s.duration = (a and a.frames > 1) and (a.frames - 1) / a.fps or 1
+    end
+end
+
+local function decode(a)
+    local nr, np = #a.ar, #a.ap
+    local stride = nr * 4 + np * 3
+    if stride * 2 ~= a.bpf then error("sentrybot_anims.bin doesn't match sentrybot.txt", 0) end
+    local d, n, base = {}, a.frames * stride, a.off
+    local i = 0
+    while i < n do
+        local cnt = math.min(250, n - i)
+        local bytes = { string.byte(BIN, base + i * 2 + 1, base + (i + cnt) * 2) }
+        for k = 1, cnt do
+            local v = bytes[k * 2 - 1] + bytes[k * 2] * 256
+            if v >= 32768 then v = v - 65536 end
+            d[i + k] = v
+        end
+        i = i + cnt
+    end
+    local q = nr * 4
+    for f = 0, a.frames - 1 do
+        local o = f * stride
+        for k = 1, q do d[o + k] = d[o + k] / 32767 end
+        for k = q + 1, stride do d[o + k] = d[o + k] / 64 end
+    end
+    a.stride, a.data = stride, d
+end
+
+----------------------------------------------------------------------------------------------
+-- Posing (same as the L4D2 chips): local bone rotations/positions, then bone and piece matrices
+
+local Q, P, TQ, TP = {}, {}, {}, {}
+local W, SK = {}, {}
+
+local function sample(a, frame)
+    if not a.data then decode(a) end
+    if a.delta then
+        for b = 1, NB do
+            local i, j = b * 4, b * 3
+            TQ[i - 3], TQ[i - 2], TQ[i - 1], TQ[i] = 0, 0, 0, 1
+            TP[j - 2], TP[j - 1], TP[j] = 0, 0, 0
+        end
+    else
+        for i = 1, NB * 4 do TQ[i] = REST_Q[i] end
+        for i = 1, NB * 3 do TP[i] = REST_P[i] end
+    end
+    for _, c in ipairs(a.cr) do local i = c[1] * 4; TQ[i - 3], TQ[i - 2], TQ[i - 1], TQ[i] = c[2], c[3], c[4], c[5] end
+    for _, c in ipairs(a.cp) do local j = c[1] * 3; TP[j - 2], TP[j - 1], TP[j] = c[2], c[3], c[4] end
+    local F = a.frames
+    if F < 1 or a.bpf == 0 then return end
+    if frame < 0 then frame = 0 elseif frame > F - 1 then frame = F - 1 end
+    local f0 = math.floor(frame)
+    local s = frame - f0
+    local f1 = f0 + 1
+    if f1 > F - 1 then f1 = F - 1 end
+    local d, st, r = a.data, a.stride, 1 - s
+    local o0, o1 = f0 * st, f1 * st
+    local ar = a.ar
+    for k = 1, #ar do
+        local i, o = ar[k] * 4, (k - 1) * 4
+        local x = d[o0 + o + 1] * r + d[o1 + o + 1] * s
+        local y = d[o0 + o + 2] * r + d[o1 + o + 2] * s
+        local z = d[o0 + o + 3] * r + d[o1 + o + 3] * s
+        local w = d[o0 + o + 4] * r + d[o1 + o + 4] * s
+        local l = 1 / math.sqrt(x * x + y * y + z * z + w * w)
+        TQ[i - 3], TQ[i - 2], TQ[i - 1], TQ[i] = x * l, y * l, z * l, w * l
+    end
+    local ap, q = a.ap, #ar * 4
+    for k = 1, #ap do
+        local j, o = ap[k] * 3, q + (k - 1) * 3
+        TP[j - 2] = d[o0 + o + 1] * r + d[o1 + o + 1] * s
+        TP[j - 1] = d[o0 + o + 2] * r + d[o1 + o + 2] * s
+        TP[j]     = d[o0 + o + 3] * r + d[o1 + o + 3] * s
+    end
+end
+
+local function accumulate(seq, cycle, weight, depth)
+    local a = seq.anim
+    if a then
+        sample(a, cycle * (a.frames - 1))
+        local sw, delta = seq.sw, a.delta
+        for b = 1, NB do
+            local w = weight
+            if sw then w = w * sw[b] end
+            if w > 0.001 then
+                local i, j = b * 4, b * 3
+                local ax, ay, az, aw = Q[i - 3], Q[i - 2], Q[i - 1], Q[i]
+                local bx, by, bz, bw = TQ[i - 3], TQ[i - 2], TQ[i - 1], TQ[i]
+                if delta then
+                    if bw < 0 then bx, by, bz, bw = -bx, -by, -bz, -bw end
+                    if w < 0.999 then
+                        bx, by, bz, bw = bx * w, by * w, bz * w, 1 - w + bw * w
+                        local l = 1 / math.sqrt(bx * bx + by * by + bz * bz + bw * bw)
+                        bx, by, bz, bw = bx * l, by * l, bz * l, bw * l
+                    end
+                    Q[i - 3] = aw * bx + ax * bw + ay * bz - az * by
+                    Q[i - 2] = aw * by - ax * bz + ay * bw + az * bx
+                    Q[i - 1] = aw * bz + ax * by - ay * bx + az * bw
+                    Q[i]     = aw * bw - ax * bx - ay * by - az * bz
+                    P[j - 2], P[j - 1], P[j] = P[j - 2] + TP[j - 2] * w, P[j - 1] + TP[j - 1] * w, P[j] + TP[j] * w
+                elseif w >= 0.999 then
+                    Q[i - 3], Q[i - 2], Q[i - 1], Q[i] = bx, by, bz, bw
+                    P[j - 2], P[j - 1], P[j] = TP[j - 2], TP[j - 1], TP[j]
+                else
+                    if ax * bx + ay * by + az * bz + aw * bw < 0 then bx, by, bz, bw = -bx, -by, -bz, -bw end
+                    local r = 1 - w
+                    local x, y, z, ww = ax * r + bx * w, ay * r + by * w, az * r + bz * w, aw * r + bw * w
+                    local l = 1 / math.sqrt(x * x + y * y + z * z + ww * ww)
+                    Q[i - 3], Q[i - 2], Q[i - 1], Q[i] = x * l, y * l, z * l, ww * l
+                    P[j - 2], P[j - 1], P[j] = P[j - 2] * r + TP[j - 2] * w, P[j - 1] * r + TP[j - 1] * w, P[j] * r + TP[j] * w
+                end
+            end
+        end
+    end
+    if depth > 3 then return end
+    for _, al in ipairs(seq.al) do
+        local ls = SEQS[al.seq]
+        if ls and ls.anim and not ls.skip then
+            local lw, lc = weight, cycle
+            if al.start ~= al.stop then
+                if cycle < al.start or cycle >= al.stop then lw = 0
+                else
+                    local s = 1
+                    if cycle < al.peak and al.start ~= al.peak then s = (cycle - al.start) / (al.peak - al.start)
+                    elseif cycle > al.tail and al.stop ~= al.tail then s = (al.stop - cycle) / (al.stop - al.tail) end
+                    lw = weight * s
+                    lc = (cycle - al.start) / (al.stop - al.start)
+                end
+            end
+            if lw > 0.001 then accumulate(ls, lc, lw, depth + 1) end
+        end
+    end
+end
+
+local function computeSkin()
+    for b = 1, NB do
+        local i, j, o = b * 4, b * 3, b * 12 - 12
+        local x, y, z, w = Q[i - 3], Q[i - 2], Q[i - 1], Q[i]
+        local xx, yy, zz, xy, xz, yz, wx, wy, wz = x * x, y * y, z * z, x * y, x * z, y * z, w * x, w * y, w * z
+        local a0, a1, a2 = 1 - 2 * (yy + zz), 2 * (xy - wz), 2 * (xz + wy)
+        local a4, a5, a6 = 2 * (xy + wz), 1 - 2 * (xx + zz), 2 * (yz - wx)
+        local a8, a9, a10 = 2 * (xz - wy), 2 * (yz + wx), 1 - 2 * (xx + yy)
+        local px, py, pz = P[j - 2], P[j - 1], P[j]
+        local r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11
+        local par = PARENT[b]
+        if par == 0 then
+            r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11 = a0, a1, a2, px, a4, a5, a6, py, a8, a9, a10, pz
+        else
+            local q = par * 12 - 12
+            local m0, m1, m2, m3 = W[q + 1], W[q + 2], W[q + 3], W[q + 4]
+            local m4, m5, m6, m7 = W[q + 5], W[q + 6], W[q + 7], W[q + 8]
+            local m8, m9, m10, m11 = W[q + 9], W[q + 10], W[q + 11], W[q + 12]
+            r0, r1, r2 = m0 * a0 + m1 * a4 + m2 * a8, m0 * a1 + m1 * a5 + m2 * a9, m0 * a2 + m1 * a6 + m2 * a10
+            r3 = m0 * px + m1 * py + m2 * pz + m3
+            r4, r5, r6 = m4 * a0 + m5 * a4 + m6 * a8, m4 * a1 + m5 * a5 + m6 * a9, m4 * a2 + m5 * a6 + m6 * a10
+            r7 = m4 * px + m5 * py + m6 * pz + m7
+            r8, r9, r10 = m8 * a0 + m9 * a4 + m10 * a8, m8 * a1 + m9 * a5 + m10 * a9, m8 * a2 + m9 * a6 + m10 * a10
+            r11 = m8 * px + m9 * py + m10 * pz + m11
+        end
+        W[o + 1], W[o + 2], W[o + 3], W[o + 4] = r0, r1, r2, r3
+        W[o + 5], W[o + 6], W[o + 7], W[o + 8] = r4, r5, r6, r7
+        W[o + 9], W[o + 10], W[o + 11], W[o + 12] = r8, r9, r10, r11
+        local p0, p1, p2, p3 = P2B[o + 1], P2B[o + 2], P2B[o + 3], P2B[o + 4]
+        local p4, p5, p6, p7 = P2B[o + 5], P2B[o + 6], P2B[o + 7], P2B[o + 8]
+        local p8, p9, p10, p11 = P2B[o + 9], P2B[o + 10], P2B[o + 11], P2B[o + 12]
+        SK[o + 1] = r0 * p0 + r1 * p4 + r2 * p8
+        SK[o + 2] = r0 * p1 + r1 * p5 + r2 * p9
+        SK[o + 3] = r0 * p2 + r1 * p6 + r2 * p10
+        SK[o + 4] = r0 * p3 + r1 * p7 + r2 * p11 + r3
+        SK[o + 5] = r4 * p0 + r5 * p4 + r6 * p8
+        SK[o + 6] = r4 * p1 + r5 * p5 + r6 * p9
+        SK[o + 7] = r4 * p2 + r5 * p6 + r6 * p10
+        SK[o + 8] = r4 * p3 + r5 * p7 + r6 * p11 + r7
+        SK[o + 9] = r8 * p0 + r9 * p4 + r10 * p8
+        SK[o + 10] = r8 * p1 + r9 * p5 + r10 * p9
+        SK[o + 11] = r8 * p2 + r9 * p6 + r10 * p10
+        SK[o + 12] = r8 * p3 + r9 * p7 + r10 * p11 + r11
+    end
+end
+
+local function applyPieces()
+    for _, pc in ipairs(PIECES) do
+        local h = pc.holo
+        if h and h:isValid() then
+            local bones, ws = pc.bones, pc.w
+            local m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11 = 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            for k = 1, #bones do
+                local o, w = bones[k] * 12 - 12, ws[k]
+                m0, m1, m2, m3 = m0 + w * SK[o + 1], m1 + w * SK[o + 2], m2 + w * SK[o + 3], m3 + w * SK[o + 4]
+                m4, m5, m6, m7 = m4 + w * SK[o + 5], m5 + w * SK[o + 6], m6 + w * SK[o + 7], m7 + w * SK[o + 8]
+                m8, m9, m10, m11 = m8 + w * SK[o + 9], m9 + w * SK[o + 10], m10 + w * SK[o + 11], m11 + w * SK[o + 12]
+            end
+            pc.mat:setUnpacked(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, 0, 0, 0, 1)
+            h:setRenderMatrix(pc.mat)
+        end
+    end
+end
+
+----------------------------------------------------------------------------------------------
+-- What's playing: a base animation (cross-faded), one layer per arm, and the aim layers
+
+local base, prevBase, fadeStart, fadeDur
+local gestures = {}           -- slot "R" (gun arm) / "L" (missile arm) -> { seq, start }
+local pending = {}            -- play orders that came before the model was ready
+local anchor, probe
+local target                  -- what the server is fighting, for the aim layers
+local aimYaw, aimPitch = 0, 0
+local AIM = {}                -- aim_left / aim_right / aim_up / aim_down as one-frame layers
+local onSequence              -- sounds that go with sequences (set further down)
+
+local function cycleOf(track, now)
+    local c = (now - track.start) * (track.rate or 1) / track.seq.duration
+    if track.seq.loop then c = c - math.floor(c) elseif c > 1 then c = 1 end
+    return c < 0 and 0 or c
+end
+
+local function play(name, start, rate)
+    local s = SEQ_BY_NAME[string.lower(name)]
+    if not s or not s.anim then say("there's no sequence called \"" .. name .. "\" (!sentry list shows them all)") return end
+    if onSequence then onSequence(s, start) end
+    if s.overlay then
+        if not base then play("mtidle", start, 1) end
+        gestures[s.slot] = { seq = s, start = start, rate = 1 }
+    else
+        if base then prevBase, fadeStart, fadeDur = base, start, math.max(s.fadein or 0.2, 0.1) end
+        base = { seq = s, start = start, rate = rate or 1 }
+    end
+end
+
+local function aimLayers()
+    if aimYaw > 0.5 then accumulate(AIM.left, 0, math.min(1, aimYaw / AIM_LIMIT), 9)
+    elseif aimYaw < -0.5 then accumulate(AIM.right, 0, math.min(1, -aimYaw / AIM_LIMIT), 9) end
+    if aimPitch > 0.5 then accumulate(AIM.up, 0, math.min(1, aimPitch / AIM_LIMIT), 9)
+    elseif aimPitch < -0.5 then accumulate(AIM.down, 0, math.min(1, -aimPitch / AIM_LIMIT), 9) end
+end
+
+local function updateAim(dt)
+    local wy, wp = 0, 0
+    local g = gestures.R
+    if target and target:isValid() and anchor and anchor:isValid() and g and string.find(g.seq.name, "spin", 1, true) then
+        local l = anchor:worldToLocal(target:obbCenterW()) - AIM_PIVOT
+        -- the model looks along -X, its left is -Y
+        wy = math.clamp(math.deg(math.atan2(-l.y, -l.x)), -AIM_LIMIT, AIM_LIMIT)
+        wp = math.clamp(math.deg(math.atan2(l.z, math.sqrt(l.x * l.x + l.y * l.y))), -AIM_LIMIT, AIM_LIMIT)
+    end
+    local k = math.min(1, dt * 8)
+    aimYaw, aimPitch = aimYaw + (wy - aimYaw) * k, aimPitch + (wp - aimPitch) * k
+end
+
+local function evaluate(now)
+    if base and not base.seq.loop and not base.seq.hold and (now - base.start) * base.rate >= base.seq.duration and base.seq.name ~= "mtidle" then
+        play("mtidle", base.start + base.seq.duration / base.rate, 1)
+    end
+    for slot, g in pairs(gestures) do
+        -- a finished arm move holds its last frame a moment, so the next one in a chain takes over smoothly
+        if not g.seq.loop and (now - g.start) >= g.seq.duration + 0.35 then gestures[slot] = nil end
+    end
+    for i = 1, NB * 4 do Q[i] = REST_Q[i] end
+    for i = 1, NB * 3 do P[i] = REST_P[i] end
+    if prevBase and now < fadeStart + fadeDur then
+        accumulate(prevBase.seq, cycleOf(prevBase, now), 1, 0)
+        accumulate(base.seq, cycleOf(base, now), (now - fadeStart) / fadeDur, 0)
+    else
+        prevBase = nil
+        accumulate(base.seq, cycleOf(base, now), 1, 0)
+    end
+    if gestures.R then accumulate(gestures.R.seq, cycleOf(gestures.R, now), 1, 0) end
+    if gestures.L then accumulate(gestures.L.seq, cycleOf(gestures.L, now), 1, 0) end
+    aimLayers()
+end
+
+----------------------------------------------------------------------------------------------
+-- Loading: data, animations and mesh from GitHub, then the holograms, a bit per frame
+
+local ready = false
+local loadStep = "download"
+local busy
+local texMaterial
+
+local function startDownloads()
+    local function fail(what) return function(why) loadStep = "failed"; say("couldn't download " .. what .. " (" .. tostring(why) .. ") - is Fallout-SentryBot pushed to GitHub?") end end
+    loadStep = "downloading"
+    local ok, err = pcall(http.get, BASE_URL .. "sentrybot.txt", function(txt, _, _, code)
+        if code and code ~= 200 then fail("sentrybot.txt")("HTTP " .. code) return end
+        local ok2, err2 = pcall(http.get, BASE_URL .. "sentrybot_anims.bin", function(bin, _, _, code2)
+            if code2 and code2 ~= 200 then fail("sentrybot_anims.bin")("HTTP " .. code2) return end
+            BIN = bin
+            local ok3, err3 = pcall(http.get, BASE_URL .. "sentrybot.obj", function(obj, _, _, code3)
+                if code3 and code3 ~= 200 then fail("sentrybot.obj")("HTTP " .. code3) return end
+                busy = coroutine.wrap(function()
+                    parseData(txt)
+                    txt = nil
+                    MESHES = mesh.createFromObj(obj, true)
+                    obj = nil
+                    return "finished"
+                end)
+                loadStep = "build"
+            end, fail("sentrybot.obj"))
+            if not ok3 then fail("sentrybot.obj")(errText(err3)) end
+        end, fail("sentrybot_anims.bin"))
+        if not ok2 then fail("sentrybot_anims.bin")(errText(err2)) end
+    end, fail("sentrybot.txt"))
+    if not ok then loadStep = "download" end
+end
+
+local function makeMaterial()
+    local m = material.create("VertexLitGeneric")
+    m:setInt("$flags", 201334784)
+    m:setTextureURL("$basetexture", BASE_URL .. "sentrybot.png", function(mat, url, w, h, layout)
+        if not mat then say("couldn't download the texture") return end
+        if layout then layout(0, 0, 1024, 1024) end
+    end)
+    return m
+end
+
+local function createHolos()
+    probe = hologram.create(anchor:localToWorld(Vector(0, 0, 50)), anchor:getAngles(), MESH_MODEL, Vector(1))
+    if not probe then error("hit the hologram limit", 0) end
+    probe:setNoDraw(true)
+    probe:setParent(anchor)
+    for i, pc in ipairs(PIECES) do
+        local ms = MESHES[pc.obj]
+        if not ms then error("sentrybot.obj has no piece " .. pc.obj .. " - the .obj and .txt don't match (push both)", 0) end
+        if not hologram.canSpawn() then error("hit the hologram limit (the Sentry Bot needs " .. (#PIECES + 1) .. " clientside holograms)", 0) end
+        local h = hologram.create(anchor:getPos(), anchor:getAngles(), MESH_MODEL, Vector(1))
+        h:setNoDraw(true)
+        h:setParent(anchor)
+        h:setMesh(ms)
+        h:setMeshMaterial(texMaterial)
+        h:setRenderBounds(Vector(-140, -140, -40), Vector(140, 140, 160))
+        if h.setLightingOriginEntity then h:setLightingOriginEntity(probe) end
+        pc.holo, pc.mat = h, Matrix()
+        if i % 10 == 0 then coroutine.yield() end
+    end
+    return "finished"
+end
+
+hook.add("think", "fosbLoad", function()
+    if loadStep == "download" then
+        if http.canRequest() then startDownloads() end
+        return
+    end
+    if not busy then return end
+    if cpuTotalAverage() > cpuMax() * LOAD_AVG then return end
+    while cpuUsed() < cpuMax() * LOAD_CPU do
+        local ok, res = pcall(busy)
+        if not ok then
+            busy, loadStep = nil, "failed"
+            say("couldn't build the Sentry Bot: " .. errText(res))
+            return
+        end
+        if res == "finished" then
+            busy = nil
+            if loadStep == "build" then
+                loadStep = "holos"
+                texMaterial = makeMaterial()
+                for _, n in ipairs({ "left", "right", "up", "down" }) do
+                    AIM[n] = { name = "aim_" .. n, anim = ANIM_BY_NAME["aim_" .. n], al = {} }   -- no anim: the layer does nothing
+                end
+            elseif loadStep == "holos" then
+                loadStep, ready = "ready", true
+                for slot = 1, 3 do local p = pending[slot] if p then play(p.name, p.start, p.rate) end end
+                pending = {}
+                if not base then play("mtidle", timer.curtime(), 1) end
+                say("loaded: " .. #PIECES .. " pieces, " .. #SEQS .. " sequences. Type !sentry for commands.")
+            end
+            return
+        end
+    end
+end)
+
+hook.add("think", "fosbHolos", function()
+    if loadStep == "holos" and not busy and anchor and anchor:isValid() and not probe then
+        busy = coroutine.wrap(createHolos)
+    end
+end)
+
+net.receive("fosb", function()
+    net.readEntity(function(e) if e then anchor = e end end)
+    local name, start, rate = net.readString(), net.readDouble(), net.readFloat()
+    if ready then play(name, start, rate)
+    else
+        -- keep the newest base animation and the newest move per arm (2hl* = left arm, 2hr* = right arm)
+        local pre = string.lower(string.sub(name, 1, 3))
+        local slot = pre == "2hl" and 3 or (pre == "2hr" and 2 or 1)
+        pending[slot] = { name = name, start = start, rate = rate }
+    end
+end)
+
+net.receive("fosbTarget", function()
+    if net.readBool() then net.readEntity(function(e) target = (e and e:isValid()) and e or nil end)
+    else target = nil end
+end)
+
+net.receive("fosbHelp", function()
+    say("!sentry stay / follow / home, !sentry off / on, !sentry sounds tests the sounds, !sentry <sequence> plays an animation while it's idle, !sentry list prints them all")
+end)
+
+net.receive("fosbList", function()
+    if not ready then say("still loading") return end
+    local names = {}
+    for _, s in ipairs(SEQS) do
+        if not s.skip then names[#names + 1] = s.name .. (s.overlay and "*" or "") .. string.format(" (%.1fs)", s.duration) end
+    end
+    printConsole("Sentry Bot sequences (* = plays on top of the current one):")
+    for i = 1, #names, 6 do printConsole("  " .. table.concat(names, ", ", i, math.min(i + 5, #names))) end
+    say("sequence list printed in the console")
+end)
+
+----------------------------------------------------------------------------------------------
+-- Sounds (the SNPC's own, mono copies on GitHub). Effects and loops stay loaded (7 of the 20 sounds
+-- a player's chips may have); voice lines are downloaded when spoken and freed afterwards (1 more).
+
+local FX_FILES = { idle_lp = "idle_lp.wav", move_lp = "move_lp.wav", fire_lp = "fire_lp.wav",
+                   spinup = "spinup.wav", spindown = "spindown.wav", missile = "missile.wav", move_end = "move_end.wav" }
+local FX_RANGE = { idle_lp = 700, move_lp = 1200, fire_lp = 4000, spinup = 2500, spindown = 2500, missile = 3500, move_end = 1200 }
+local FX_VOL   = { idle_lp = 0.5, move_lp = 0.7, fire_lp = 1, spinup = 1, spindown = 1, missile = 1, move_end = 0.8 }
+local LOOPS    = { idle_lp = true, move_lp = true, fire_lp = true }
+local VOICE_RANGE = 2500
+local fxSnd, fxQueue, loadingFx, fxErrors, fxTries = {}, {}, false, {}, {}
+for k in pairs(FX_FILES) do fxQueue[#fxQueue + 1] = k end
+table.sort(fxQueue)
+
+local function soundFailed(name, why)
+    fxErrors[#fxErrors + 1] = name .. ": " .. tostring(why)
+    say("sound " .. name .. " didn't load (" .. tostring(why) .. ")")
+end
+
+local nextFxTry = 0
+hook.add("think", "fosbSounds", function()
+    if loadingFx or #fxQueue == 0 or timer.curtime() < nextFxTry then return end
+    if bass.soundsLeft and bass.soundsLeft() < 2 then
+        soundFailed(#fxQueue .. " sounds", "out of sound slots, Starfall allows 20 per player")
+        fxQueue = {}
+        return
+    end
+    local key = table.remove(fxQueue, 1)
+    loadingFx = true
+    local ok, err = pcall(bass.loadURL, BASE_URL .. "sounds/" .. FX_FILES[key], "3d noblock noplay", function(snd, errNum, errName)
+        loadingFx = false
+        if snd then
+            fxSnd[key] = snd
+            pcall(function()
+                snd:setVolume(FX_VOL[key])
+                snd:setFade(FX_RANGE[key] * 0.25, FX_RANGE[key])
+                if LOOPS[key] then snd:setLooping(true) end
+            end)
+        else
+            soundFailed(key, "bass error " .. tostring(errNum) .. " " .. tostring(errName))
+        end
+    end)
+    if not ok then
+        loadingFx = false
+        fxTries[key] = (fxTries[key] or 0) + 1
+        if fxTries[key] >= 3 then soundFailed(key, errText(err))
+        else table.insert(fxQueue, 1, key) nextFxTry = timer.curtime() + 2 end
+    end
+end)
+
+local function sndPos() return anchor and anchor:isValid() and anchor:getPos() + Vector(0, 0, 50) or player():getPos() end
+
+local function playFx(key)
+    local s = fxSnd[key]
+    if not s or not s:isValid() then return false end
+    return pcall(function() s:setPos(sndPos()) s:setTime(0) s:play() end)
+end
+
+-- loops: playing or paused (stop() would free them)
+local loopOn = {}
+local function setLoop(key, on, pitch)
+    local s = fxSnd[key]
+    if not s or not s:isValid() then return end
+    pcall(function()
+        s:setPos(sndPos())
+        if pitch then s:setPitch(pitch) end
+        if on and not loopOn[key] then s:play() elseif not on and loopOn[key] then s:pause() end
+    end)
+    loopOn[key] = on
+end
+
+onSequence = function(s, start)
+    if timer.curtime() - start > 1 then return end    -- old news (joined late)
+    local n = string.lower(s.name)
+    if n == "2hrattackspinup" then playFx("spinup")
+    elseif n == "2hrattackspindown" then playFx("spindown")
+    elseif n == "2hlattackleft" then playFx("missile") end
+end
+
+-- voice lines: one at a time, downloaded when spoken, freed when done
+local voiceSnd, voiceGen = nil, 0
+local function freeVoice()
+    if voiceSnd and voiceSnd:isValid() then pcall(voiceSnd.stop, voiceSnd) end
+    voiceSnd = nil
+end
+local function speak(kind, n, p)
+    if not VOICES[kind] then return false end
+    freeVoice()
+    voiceGen = voiceGen + 1
+    local gen = voiceGen
+    if bass.soundsLeft and bass.soundsLeft() < 1 then return false end
+    local ok = pcall(bass.loadURL, BASE_URL .. "sounds/" .. kind .. n .. ".wav", "3d noplay", function(snd, errNum, errName)
+        if not snd then say("voice " .. kind .. n .. " didn't load (bass error " .. tostring(errNum) .. " " .. tostring(errName) .. ")") return end
+        if gen ~= voiceGen then pcall(snd.stop, snd) return end    -- a newer line came first
+        voiceSnd = snd
+        pcall(function()
+            snd:setPos(anchor and anchor:isValid() and anchor:getPos() + Vector(0, 0, 70) or p)
+            snd:setVolume(1)
+            snd:setFade(VOICE_RANGE * 0.25, VOICE_RANGE)
+            snd:play()
+        end)
+    end)
+    return ok
+end
+
+net.receive("fosbVoice", function()
+    local kind, n, p = net.readString(), net.readUInt(8), net.readVector()
+    speak(kind, n, p)
+end)
+
+net.receive("fosbSndTest", function()
+    local n = 0
+    for _ in pairs(fxSnd) do n = n + 1 end
+    say(n .. " of 7 effect sounds loaded, " .. #fxQueue .. " still queued"
+        .. (bass.soundsLeft and (", " .. bass.soundsLeft() .. " sound slots free") or ""))
+    for _, e in ipairs(fxErrors) do say("  failed: " .. e) end
+    if hasPermission and not hasPermission("bass.loadURL", BASE_URL .. "sounds/spinup.wav") then
+        say("  you haven't allowed this chip to play URL sounds (bass.loadURL permission)")
+    end
+    say(speak("hello", 1, player():getPos()) and "saying hello" or "couldn't start a voice line")
+end)
+
+-- the hum while standing, the motor while moving (lower when walking), the gun loop while spun up
+local wasMoving = false
+local function sounds()
+    if not anchor or not anchor:isValid() then return end
+    local bn = base and string.lower(base.seq.name) or ""
+    local moving = bn == "walk" or bn == "run"
+    local off = bn == "specialidle_powerdown"
+    setLoop("move_lp", moving, bn == "run" and 1 or 0.7)
+    setLoop("idle_lp", not moving and not off)
+    if wasMoving and not moving then playFx("move_end") end
+    wasMoving = moving
+    local g = gestures.R
+    setLoop("fire_lp", g ~= nil and string.lower(g.seq.name) == "2hrattackspinloop")
+    if voiceSnd and voiceSnd:isValid() then
+        local ok, stopped = pcall(voiceSnd.isStopped, voiceSnd)
+        if ok and stopped then freeVoice() else pcall(voiceSnd.setPos, voiceSnd, anchor:getPos() + Vector(0, 0, 70)) end
+    end
+end
+
+-- animate: ~30 times a second up close, less far away
+local lastUpdate, shown, lastSnd = 0, false, 0
+hook.add("think", "fosbAnim", function()
+    if not ready or not base or not anchor or not anchor:isValid() then return end
+    local now = timer.curtime()
+    if now - lastSnd > 0.1 then lastSnd = now sounds() end
+    local d2 = player():getEyePos():getDistanceSqr(anchor:getPos())
+    local rate = d2 > 9000000 and 5 or (d2 > 2250000 and 15 or UPDATE_RATE)
+    if now - lastUpdate < 1 / rate then return end
+    if cpuTotalAverage() > cpuMax() * 0.7 then return end
+    updateAim(math.min(0.2, now - lastUpdate))
+    lastUpdate = now
+    evaluate(now)
+    computeSkin()
+    applyPieces()
+    if not shown then
+        shown = true
+        for _, pc in ipairs(PIECES) do if pc.holo and pc.holo:isValid() then pc.holo:setNoDraw(false) end end
+    end
+end)
