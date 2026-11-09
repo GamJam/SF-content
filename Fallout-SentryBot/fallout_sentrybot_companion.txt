@@ -12,7 +12,8 @@
 -- Model, animations and the SNPC's own voice lines / weapon sounds: GamJam/SF-content/Fallout-SentryBot,
 -- played on each player's game, so nobody needs the addon installed. Needs Wiremod.
 --
--- Chat (owner only): !sentry stay / follow / home, !sentry off / on (powers down / up),
+-- Chat (owner only): !sentry stay / follow / home, !sentry off / on (powers down / up), !sentry fixed (ceiling
+--                    turrets and cameras: left alone by default, toggles shooting them),
 --                    !sentry <sequence> plays an animation while it's idle, !sentry list, !sentry sounds
 
 local BASE_URL   = "https://raw.githubusercontent.com/GamJam/SF-content/main/Fallout-SentryBot/"
@@ -54,13 +55,17 @@ local GUN_TRACER     = "Tracer" -- Wire only allows its own tracer list
 local GUN_CONE       = 28       -- fires while the target is this many degrees off its nose (the aim layers cover 20)
 local SPINUP_TIME    = 1.13     -- 2hrattackspinup's "event_spin"
 local SPIN_LINGER    = 0.6      -- keeps spinning this long after losing its target
-local MISSILE_MIN    = 350
+local MISSILE_MIN    = 200
 local MISSILE_MAX    = 2000
 local MISSILE_SPEED  = 1300
 local MISSILE_TURN   = 110      -- homing, degrees per second
 local MISSILE_DAMAGE = 110
 local MISSILE_RADIUS = 200
-local MISSILE_COOLDOWN = { 6, 12 }
+local MISSILE_COOLDOWN = { 3, 6 }   -- seconds between missiles (after the 3.6 s arm sequence)
+local LOB_APEX       = 170      -- behind cover, missiles go up this far over the higher end and drop on the target
+local LOB_GRAVITY    = 800
+local LOB_COOLDOWN   = 1.5      -- seconds between lobs while the gun is blocked
+local COVER_GIVEUP   = 9        -- no clear shot for this long: leaves that enemy for a few seconds
 local SAFE_MARGIN    = 100      -- never sets off a blast within its radius + this of you
 local UPDATE         = 0.045
 
@@ -71,10 +76,13 @@ local TARGET_CLASSES = {
     npc_headcrab = true, npc_headcrab_fast = true, npc_headcrab_black = true, npc_headcrab_poison = true,
     npc_antlion = true, npc_antlion_worker = true, npc_antlionguard = true, npc_barnacle = true,
     npc_combine_s = true, npc_metropolice = true, npc_manhack = true, npc_cscanner = true, npc_clawscanner = true,
-    npc_rollermine = true, npc_turret_floor = true, npc_turret_ceiling = true, npc_combine_camera = true,
+    npc_rollermine = true, npc_turret_floor = true,
     npc_hunter = true, npc_stalker = true, npc_sniper = true, npc_strider = true, npc_helicopter = true,
     npc_combinegunship = true, npc_combinedropship = true,
 }
+-- ceiling turrets and Combine cameras: left alone unless switched on with "!sentry fixed"
+local FIXED_CLASSES = { npc_turret_ceiling = true, npc_combine_camera = true }
+local shootFixed = false
 
 local GUN_MODEL       = "models/props_junk/PopCan01a.mdl"
 local EXPLOSIVE_MODEL = "models/bull/gates/logic_nano.mdl"
@@ -210,7 +218,11 @@ local ignoreTarget = {}
 local killWatch          -- { e, t }: the enemy it last hit, to say something when it dies
 
 local function eyePos() return pos + Vector(0, 0, 62) end
-local function validTarget(e) return isValid(e) and e:isNPC() and TARGET_CLASSES[e:getClass()] == true and e:getHealth() > 0 end
+local function validTarget(e)
+    if not isValid(e) or not e:isNPC() or e:getHealth() <= 0 then return false end
+    local c = e:getClass()
+    return TARGET_CLASSES[c] == true or (shootFixed and FIXED_CLASSES[c] == true)
+end
 
 local function canSee(e)
     local tr = trace.line(eyePos(), e:obbCenterW(), filt(me), MASK.OPAQUE)
@@ -306,19 +318,48 @@ local function clearShot(from, to)
     if isValid(e) then
         return e:isNPC() and TARGET_CLASSES[e:getClass()] == true    -- another enemy in the way is fine; players, friends, props aren't
     end
-    return tr.HitPos:getDistance(to) < 40                           -- the ground at its feet is fine; a wall isn't
+    -- the ground right at its feet is fine; a wall, crate edge or step in front of it isn't
+    return tr.HitPos:getDistance(to) < 30 and tr.HitNormal.z > 0.7
 end
 
 local function setFire(on)
     if gunWl then pcall(function() gunWl["Fire"] = on and 1 or 0 end) end
 end
 
+-- Can the gun actually hit it? Its eyes see over low cover that the barrel (lower down) can't shoot over,
+-- so check from the barrel a few times a second: at the middle, else at the top of the target.
+-- Blocked for a moment = it stops shooting and walks round the cover (see move).
+local blockedSince, nextShotCheck, shotTop, flankBase = nil, 0, false, 1
+local function topPoint(e) return e:obbCenterW() + Vector(0, 0, e:obbSize().z * 0.35) end
+local checkTarget
+local function shotCheck(now)
+    if target ~= checkTarget then checkTarget, blockedSince, nextShotCheck = target, nil, 0 end
+    if not (validTarget(target) and targetVisible) then blockedSince = nil return end
+    if now < nextShotCheck or not cpuOk() then return end
+    nextShotCheck = now + 0.15
+    local from = anchor:localToWorld(MUZZLE_GUN)
+    local clear = true
+    if clearShot(from, aimPoint(target)) then shotTop = false
+    elseif clearShot(from, topPoint(target)) then shotTop = true
+    else clear = false end
+    if clear then blockedSince = nil
+    elseif not blockedSince then blockedSince, flankBase = now, math.random() < 0.5 and 1 or -1
+    elseif now - blockedSince > COVER_GIVEUP then
+        -- flanking and lobbing didn't get it out (e.g. inside a ring of barriers): leave it for a while
+        ignoreTarget[target] = now + 6
+        setTarget(nil)
+        blockedSince = nil
+    end
+end
+local function blocked(now, t) return blockedSince ~= nil and now - blockedSince > (t or 0.5) end
+
 local function updateGun(now)
     local has = powered and validTarget(target) and targetVisible and target:getPos():getDistance(pos) <= ENGAGE_RANGE
     local off = math.abs(has and angDiff((target:getPos() - pos):getAngle().y, yaw) or 180)
-    if has and off < 70 then lastGood = now end
+    local open = has and not blocked(now, 0.4)          -- behind cover: spin down instead of firing into it
+    if open and off < 70 then lastGood = now end
     if gunState == "off" then
-        if has and off < 70 and now >= gunT then
+        if open and off < 70 and now >= gunT then
             gunState, gunT = "spinup", now
             gesture("2hrattackspinup", now)
         end
@@ -337,8 +378,8 @@ local function updateGun(now)
     end
     if gunState ~= "firing" or not isValid(gun) then setFire(false) return end
     -- keep the turret on the barrel, pointed at the target
-    if not has or off > GUN_CONE then setFire(false) return end
-    local tp = aimPoint(target)
+    if not has or off > GUN_CONE or blockedSince then setFire(false) return end
+    local tp = shotTop and topPoint(target) or aimPoint(target)
     local from = anchor:localToWorld(MUZZLE_GUN)
     local pitch = math.clamp(-(tp - from):getAngle().p, -AIM_LIMIT, AIM_LIMIT)   -- the client tilts the gun this much
     from = from + Vector(0, 0, pitch * 0.9)
@@ -352,7 +393,8 @@ end
 ----------------------------------------------------------------------------------------------
 -- Missiles: raise the arm (2hlequip), fire (2hlattackleft), lower it (2hlunequip)
 
-local nextMissile = timer.curtime() + 4
+local nextMissile = timer.curtime() + 3.5
+local lastLaunchEnd = -100
 local launch          -- { t }: the arm sequence in progress
 local flying          -- { pos, vel, t, target }
 
@@ -368,36 +410,57 @@ local function explodeAt(p)
     return true
 end
 
-local function fireMissile(now)
+-- lob: a high arc (like a mortar) that comes down on a target the gun can't reach behind cover
+local function lobVelocity(from, aim)
+    local d = aim - from
+    local h = Vector(d.x, d.y, 0)
+    local vz = math.sqrt(2 * LOB_GRAVITY * (LOB_APEX + math.max(0, d.z)))     -- rises LOB_APEX over the higher end
+    local disc = vz * vz - 2 * LOB_GRAVITY * d.z
+    local T = (vz + math.sqrt(math.max(0, disc))) / LOB_GRAVITY                   -- time to come down at the target's height
+    local v = h / math.max(T, 0.2)
+    return Vector(v.x, v.y, vz)
+end
+
+local function fireMissile(now, lob)
     local from = anchor:localToWorld(MUZZLE_MISSILE)
     local aim = validTarget(target) and aimPoint(target) or (from + Angle(0, yaw, 0):getForward() * 1000)
-    local dir = (aim - from):getNormalized()
-    local ok, h = pcall(hologram.create, from, dir:getAngle(), MISSILE_MODEL, Vector(1))
+    local vel = lob and lobVelocity(from, aim) or (aim - from):getNormalized() * MISSILE_SPEED
+    local ok, h = pcall(hologram.create, from, vel:getAngle(), MISSILE_MODEL, Vector(1))
     if not ok or not h then return end
     missile = h
     pcall(h.setTrails, h, 10, 0, 0.7, "trails/smoke", Color(210, 210, 210, 160), nil, false)
     pcall(h.emitSound, h, "weapons/rpg/rocket1.wav", 80)
-    flying = { pos = from, vel = dir * MISSILE_SPEED, t = now, target = target }
+    flying = { pos = from, vel = vel, t = now, target = target, lob = lob }
     if validTarget(target) then killWatch = { e = target, t = now + 1.5 } end
 end
 
 local function updateLaunch(now)
     if not launch then
-        if not powered or airborne or now < nextMissile or flying or not validTarget(target) or not targetVisible then return end
+        -- behind cover the gun is useless, so the missile comes sooner (a lob over the top)
+        local covered = blocked(now, 0.6)
+        local ready = now >= nextMissile or (covered and now >= lastLaunchEnd + LOB_COOLDOWN)
+        if not powered or airborne or not ready or flying or not validTarget(target) or not targetVisible then return end
         local tp = target:getPos()
         local d = tp:getDistance(pos)
-        if d < MISSILE_MIN or d > MISSILE_MAX then return end
-        if tp:getDistance(me:getPos()) < MISSILE_RADIUS + SAFE_MARGIN + 50 then return end      -- too close to you
-        if math.abs(angDiff((tp - pos):getAngle().y, yaw)) > 30 then return end
+        if d < (covered and 150 or MISSILE_MIN) or d > MISSILE_MAX then return end
+        if tp:getDistance(me:getPos()) < MISSILE_RADIUS + SAFE_MARGIN then return end   -- the blast would reach you
+        if math.abs(angDiff((tp - pos):getAngle().y, yaw)) > 50 then return end        -- (the missile homes in)
         launch = { t = now, fired = false }
         gesture("2hlequip", now)
         return
     end
     local el = now - launch.t
+    if not launch.fired and el >= EQUIP_TIME and not (validTarget(target) and targetVisible) then
+        -- the minigun got it while the arm was coming up: keep the missile for the next one
+        launch = nil
+        gesture("2hlunequip", now)
+        nextMissile = now + 1.5
+        return
+    end
     if not launch.fired and el >= EQUIP_TIME then
         launch.fired = true
         gesture("2hlattackleft", launch.t + EQUIP_TIME)          -- "event_firemissile" is on its first frame
-        fireMissile(now)
+        fireMissile(now, blocked(now, 0.3))
     end
     if launch.fired and not launch.down and el >= EQUIP_TIME + ATTACK_TIME then
         launch.down = true
@@ -405,6 +468,7 @@ local function updateLaunch(now)
     end
     if el >= EQUIP_TIME * 2 + ATTACK_TIME then
         launch = nil
+        lastLaunchEnd = now
         nextMissile = now + MISSILE_COOLDOWN[1] + math.random() * (MISSILE_COOLDOWN[2] - MISSILE_COOLDOWN[1])
     end
 end
@@ -413,8 +477,10 @@ local function updateMissile(now, dt)
     if not flying then return end
     if not isValid(missile) then flying = nil return end
     local f = flying
+    if f.lob then
+        f.vel = f.vel - Vector(0, 0, LOB_GRAVITY * dt)                 -- a lob just falls
     -- gentle homing on the target it was fired at
-    if validTarget(f.target) then
+    elseif validTarget(f.target) then
         local want = (aimPoint(f.target) - f.pos):getNormalized()
         local cur = f.vel:getNormalized()
         local ang = math.deg(math.acos(math.clamp(cur:dot(want), -1, 1)))
@@ -440,7 +506,7 @@ local function updateMissile(now, dt)
 end
 
 ----------------------------------------------------------------------------------------------
--- Moving (the L4D2 companions' way): your trail around corners, whiskers around walls, hops over
+-- Moving (the L4D2 companions' way, minus the hops): your trail around corners, whiskers around walls,
 -- things, and back to you when stuck
 
 local NAV_MASK = MASK.NPCSOLID_BRUSHONLY
@@ -477,7 +543,10 @@ end)
 
 local function teleportHome()
     local mp = me:getPos()
-    local spot = mp - Angle(0, me:getEyeAngles().y, 0):getForward() * FOLLOW_DIST
+    -- on its own side of you (where it got left behind), not behind where you look
+    local away = Vector(pos.x - mp.x, pos.y - mp.y, 0)
+    if away:getLength() < 1 then away = Vector(-1, 0, 0) end
+    local spot = mp + away:getNormalized() * FOLLOW_DIST
     if not clearLine(mp, spot) then
         spot = mp
         for i = #crumbs, 1, -1 do
@@ -492,14 +561,6 @@ local function teleportHome()
     fx("ManhackSparks", { origin = pos + Vector(0, 0, 40), normal = Vector(0, 0, 1) })
 end
 
-local function startLeap(dest)
-    local t = math.clamp(pos:getDistance(dest) / 600, 0.6, 1.2)
-    local d = dest - pos
-    vel = Vector(d.x / t, d.y / t, d.z / t + 0.5 * GRAVITY * t)
-    airborne = true
-    setBase("mtidle")
-end
-
 local function land(now)
     airborne = false
     vel = Vector(vel.x, vel.y, 0) * 0.2
@@ -507,16 +568,7 @@ local function land(now)
     progress.p, progress.t = nil, now
 end
 
-local function tryHop(dir)
-    local up = pos + Vector(0, 0, 130)
-    local over = up + dir * 200
-    if trace.hull(pos + NAV_UP, up, NAV_MIN, NAV_MAX, nil, NAV_MASK).Hit then return false end
-    if trace.hull(up, over, NAV_MIN, NAV_MAX, nil, NAV_MASK).Hit then return false end
-    local down = trace.line(over, over - Vector(0, 0, 500), nil, NAV_MASK)
-    if not down.Hit or down.StartSolid or down.HitNormal.z < 0.6 then return false end
-    startLeap(down.HitPos)
-    return true
-end
+-- (no hopping: it's a heavy robot. Stuck = it steers the other way, then gives up / comes back to you)
 
 local function pickWaypoint(now, goal, following)
     if now >= nav.losT then
@@ -578,6 +630,25 @@ local function move(now, dt)
     elseif mode == "stay" and stayPos then
         goal, stopDist = stayPos, 40
         speed = pos:getDistance(goal) > 400 and RUN_SPEED or WALK_SPEED
+    elseif hunting and targetVisible and blocked(now, 0.6) and pos:getDistance(mp) < FIGHT_LEASH then
+        -- it can see it but cover is in the way of the gun: move in and to one side (the other side
+        -- every 4 s it stays blocked) until there's a clear shot; the stuck check gives up after a while
+        local tp = target:getPos()
+        local to = flat(tp - pos)
+        local d = math.max(1, to:getLength())
+        local side = flankBase * ((math.floor((now - blockedSince) / 4) % 2 == 0) and 1 or -1)
+        local n = to / d
+        local back, sideways = tp - n * math.max(120, d * 0.5), Vector(-n.y, n.x, 0) * math.min(220, d * 0.6)
+        -- (re-checked a few times a second) that side's spot is inside / behind the prop: the other side,
+        -- else straight in, where the angle over low cover is steeper
+        if now >= (nav.flankT or 0) then
+            nav.flankT = now + 0.3
+            if clearLine(pos, back + sideways * side) then nav.flankSide = side
+            elseif clearLine(pos, back - sideways * side) then nav.flankSide = -side
+            else nav.flankSide = 0 end
+        end
+        goal = back + sideways * (nav.flankSide or side)
+        speed, stopDist = RUN_SPEED, 30
     elseif hunting and targetVisible and target:getPos():getDistance(pos) <= STAND_RANGE and pos:getDistance(mp) < FIGHT_LEASH then
         goal, stopDist, speed = pos, 1e9, RUN_SPEED                        -- in range: plant and shoot
     elseif hunting and pos:getDistance(mp) < FIGHT_LEASH then
@@ -632,7 +703,7 @@ local function move(now, dt)
             nav.side = -nav.side
             nav.crumb, nav.probe = nil, nil
             if progress.stuck <= 2 then
-                tryHop(d:getNormalized())
+                -- first two seconds: just try the whiskers on the other side (flipped above)
             elseif hunting and not following then
                 ignoreTarget[target] = now + 8
                 setTarget(nil)
@@ -669,8 +740,6 @@ local function move(now, dt)
         wantYaw = (target:getPos() - pos):getAngle().y
     elseif vel:getLength() > 30 then
         wantYaw = vel:getAngle().y
-    elseif dist < stopDist + 20 and powered then
-        wantYaw = me:getEyeAngles().y
     end
     local s = TURN_RATE * dt
     yaw = yaw + math.clamp(angDiff(wantYaw, yaw), -s, s)
@@ -757,6 +826,7 @@ hook.add("think", "fosbCompanion", function()
     if not isValid(me) or not isValid(anchor) then return end
     if not me:isAlive() then setFire(false) return end
     if powered then scanStep(now) end
+    shotCheck(now)
     move(now, dt)
     updateGun(now)
     updateLaunch(now)
@@ -768,15 +838,24 @@ end)
 
 hook.add("PlayerSay", "fosbChat", function(ply, text)
     if ply ~= me then return end
-    if string.lower(string.sub(text, 1, 7)) ~= "!sentry" then return end
-    local cmd = string.match(string.sub(text, 1, 80), "^!sentry%s*(%S*)")
-    if not cmd then return end
-    cmd = string.lower(cmd)
+    local cmd
+    if string.lower(text) == "!fixed" then
+        cmd = "fixed"                       -- the shared toggle all your sentries/companions listen for
+    else
+        if string.lower(string.sub(text, 1, 7)) ~= "!sentry" then return end
+        cmd = string.match(string.sub(text, 1, 80), "^!sentry%s*(%S*)")
+        if not cmd then return end
+        cmd = string.lower(cmd)
+    end
     if cmd == "" or cmd == "help" then net.start("fosbHelp") net.send(me)
     elseif cmd == "list" then net.start("fosbList") net.send(me)
     elseif cmd == "sounds" then net.start("fosbSndTest") net.send(me)
     elseif cmd == "stay" then mode, stayPos = "stay", pos print("Sentry Bot: holding here (still fights enemies near you)")
     elseif cmd == "follow" then mode = "follow" print("Sentry Bot: following you")
+    elseif cmd == "fixed" then
+        shootFixed = not shootFixed
+        if not shootFixed and isValid(target) and FIXED_CLASSES[target:getClass()] then setTarget(nil) end
+        print("Sentry Bot: ceiling turrets and cameras " .. (shootFixed and "ARE targets now" or "are left alone"))
     elseif cmd == "home" then mode = "follow" setTarget(nil) teleportHome() print("Sentry Bot: back to you")
     elseif cmd == "off" then if powered then powerDown() print("Sentry Bot: powered down") end
     elseif cmd == "on" then if not powered then powerUp() print("Sentry Bot: powering up") end
@@ -804,7 +883,7 @@ local function errText(err) return type(err) == "table" and tostring(err.message
 
 -- skeleton, pieces, animations and sequences from sentrybot.txt (indices made 1-based)
 local NB = 0
-local PARENT, REST_P, REST_Q, P2B = {}, {}, {}, {}
+local PARENT, REST_P, REST_Q, P2B, BONE_BY_NAME = {}, {}, {}, {}, {}
 local PIECES, ANIMS, SEQS, SEQ_BY_NAME, ANIM_BY_NAME = {}, {}, {}, {}, {}
 local BIN
 local MESHES
@@ -821,6 +900,7 @@ local function parseData(body)
         elseif k == "bone" then
             local b = tonumber(t[2]) + 1
             PARENT[b] = tonumber(t[3]) + 1
+            BONE_BY_NAME[t[4]] = b
             for c = 1, 3 do REST_P[b * 3 - 3 + c] = tonumber(t[4 + c]) end
             for c = 1, 4 do REST_Q[b * 4 - 4 + c] = tonumber(t[7 + c]) end
             for c = 1, 12 do P2B[b * 12 - 12 + c] = tonumber(t[11 + c]) end
@@ -1074,6 +1154,7 @@ local anchor, probe
 local target                  -- what the server is fighting, for the aim layers
 local aimYaw, aimPitch = 0, 0
 local AIM = {}                -- aim_left / aim_right / aim_up / aim_down as one-frame layers
+local ARM_FIX                 -- the idle's left (missile) arm, laid over the run
 local onSequence              -- sounds that go with sequences (set further down)
 
 local function cycleOf(track, now)
@@ -1131,6 +1212,15 @@ local function evaluate(now)
     else
         prevBase = nil
         accumulate(base.seq, cycleOf(base, now), 1, 0)
+    end
+    if ARM_FIX then
+        -- missile arm down while running (cross-fades with the run)
+        local w = string.lower(base.seq.name) == "run" and 1 or 0
+        if prevBase then
+            local f = (now - fadeStart) / fadeDur
+            w = (string.lower(prevBase.seq.name) == "run" and 1 or 0) * (1 - f) + w * f
+        end
+        if w > 0.001 then accumulate(ARM_FIX, (now % ARM_FIX.dur) / ARM_FIX.dur, w, 9) end
     end
     if gestures.R then accumulate(gestures.R.seq, cycleOf(gestures.R, now), 1, 0) end
     if gestures.L then accumulate(gestures.L.seq, cycleOf(gestures.L, now), 1, 0) end
@@ -1225,6 +1315,16 @@ hook.add("think", "fosbLoad", function()
                 for _, n in ipairs({ "left", "right", "up", "down" }) do
                     AIM[n] = { name = "aim_" .. n, anim = ANIM_BY_NAME["aim_" .. n], al = {} }   -- no anim: the layer does nothing
                 end
+                -- the model's run holds the missile arm up; while running, that arm takes the idle pose instead
+                local idle = ANIM_BY_NAME["@mtidle"]
+                if idle then
+                    local sw = {}
+                    for b = 1, NB do sw[b] = 0 end
+                    for _, n in ipairs({ "Bip01_L_UpperArm", "Bip01_L_ForeArm", "Bip01_L_Finger1", "##SBMissile", "##SBMissile:1" }) do
+                        if BONE_BY_NAME[n] then sw[BONE_BY_NAME[n]] = 1 end
+                    end
+                    ARM_FIX = { name = "armfix", anim = idle, sw = sw, al = {}, dur = (idle.frames - 1) / idle.fps }
+                end
             elseif loadStep == "holos" then
                 loadStep, ready = "ready", true
                 for slot = 1, 3 do local p = pending[slot] if p then play(p.name, p.start, p.rate) end end
@@ -1261,7 +1361,7 @@ net.receive("fosbTarget", function()
 end)
 
 net.receive("fosbHelp", function()
-    say("!sentry stay / follow / home, !sentry off / on, !sentry sounds tests the sounds, !sentry <sequence> plays an animation while it's idle, !sentry list prints them all")
+    say("!sentry stay / follow / home, !sentry off / on, !sentry fixed toggles ceiling turrets and cameras, !sentry sounds tests the sounds, !sentry <sequence> plays an animation while it's idle, !sentry list prints them all")
 end)
 
 net.receive("fosbList", function()
@@ -1281,8 +1381,10 @@ end)
 
 local FX_FILES = { idle_lp = "idle_lp.wav", move_lp = "move_lp.wav", fire_lp = "fire_lp.wav",
                    spinup = "spinup.wav", spindown = "spindown.wav", missile = "missile.wav", move_end = "move_end.wav" }
-local FX_RANGE = { idle_lp = 700, move_lp = 1200, fire_lp = 4000, spinup = 2500, spindown = 2500, missile = 3500, move_end = 1200 }
-local FX_VOL   = { idle_lp = 0.5, move_lp = 0.7, fire_lp = 1, spinup = 1, spindown = 1, missile = 1, move_end = 0.8 }
+local FX_RANGE = { idle_lp = 400, move_lp = 1200, fire_lp = 4000, spinup = 2500, spindown = 2500, missile = 3500, move_end = 1200 }
+local VOLUME   = 0.75   -- everything at three quarters
+local FX_VOL   = { idle_lp = 0.12 * VOLUME,   -- the hum: faint, only heard up close
+                   move_lp = 0.7 * VOLUME, fire_lp = VOLUME, spinup = VOLUME, spindown = VOLUME, missile = VOLUME, move_end = 0.8 * VOLUME }
 local LOOPS    = { idle_lp = true, move_lp = true, fire_lp = true }
 local VOICE_RANGE = 2500
 local fxSnd, fxQueue, loadingFx, fxErrors, fxTries = {}, {}, false, {}, {}
@@ -1372,7 +1474,7 @@ local function speak(kind, n, p)
         voiceSnd = snd
         pcall(function()
             snd:setPos(anchor and anchor:isValid() and anchor:getPos() + Vector(0, 0, 70) or p)
-            snd:setVolume(1)
+            snd:setVolume(VOLUME)
             snd:setFade(VOICE_RANGE * 0.25, VOICE_RANGE)
             snd:play()
         end)
@@ -1397,7 +1499,7 @@ net.receive("fosbSndTest", function()
     say(speak("hello", 1, player():getPos()) and "saying hello" or "couldn't start a voice line")
 end)
 
--- the hum while standing, the motor while moving (lower when walking), the gun loop while spun up
+-- a faint hum while standing (it was far too loud at full volume), the motor while moving (lower when walking), the gun loop while spun up
 local wasMoving = false
 local function sounds()
     if not anchor or not anchor:isValid() then return end

@@ -11,4 +11,4 @@ Starfall companion chip. Nobody needs the addon installed: the model, animations
 - `sounds/`: the SNPC's voice lines and weapon/motor sounds as mono WAV (3D sounds must be mono; `.mp3`
   in this repo goes to Git LFS, which raw.githubusercontent.com doesn't serve).
 
-Chat (owner): `!sentry stay | follow | home | off | on | list | sounds | <sequence>`
+Chat (owner): `!sentry stay | follow | home | off | on | fixed (ceiling turrets + cameras, off by default) | list | sounds | <sequence>`
