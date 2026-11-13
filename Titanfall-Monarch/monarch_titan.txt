@@ -3,7 +3,8 @@
 --@shared
 
 -- The Monarch from the "Titanfall 2 - Titans" addon, as a Titan of your own.
---   * Titanfall: it drops out of the sky where the chip is, lands on one knee and waits for you.
+--   * Titanfall: press B (CALL_KEY_NAME below) and it drops out of the sky where you're aiming, lands on one
+--     knee facing you and waits for you. Nothing drops until you call it.
 --   * Auto-Titan: left alone it stands up, follows you and fights zombies, hostile aliens and Combine near
 --     you with its XO-16, a rocket salvo from the shoulder pod, and its fists up close.
 --   * Pilot: walk up and press E (use) to embark. W A S D walk, SHIFT sprint, SPACE dash, mouse aims,
@@ -12,7 +13,7 @@
 -- The model, animations and sounds come from GamJam/SF-content/Titanfall-Monarch and are drawn on each
 -- player's game, so nobody needs the addon installed. Needs Wiremod (the guns are Wire turrets / explosives).
 --
--- Chat (owner only): !titan stay / follow, !titan fall (a new Titanfall where you're looking), !titan home (one next
+-- Chat (owner only): !titan stay / follow, !titan fall (same as B), !titan home (one next
 --                    to you), !titan fixed (ceiling turrets and cameras: left alone by default), !titan sounds
 
 local BASE_URL   = "https://raw.githubusercontent.com/GamJam/SF-content/main/Titanfall-Monarch/"
@@ -36,6 +37,9 @@ local T_RELOAD_ANIM = 4.8
 local T_POD_OUT, T_POD_IN = 0.34, 0.47
 
 -- voice lines: kind -> how many files (sounds/<kind><n>.wav), loaded one at a time when spoken
+-- the key that calls in the Titanfall where you're aiming: any KEY.<name>, e.g. "B", "G", "H", "T"
+local CALL_KEY_NAME = "B"
+
 local VOICES = { embark = 8, kill = 6, alert = 2, outnumbered = 6 }
 
 ----------------------------------------------------------------------------------------------
@@ -105,11 +109,10 @@ local TARGET_CLASSES = {
 local FIXED_CLASSES = { npc_turret_ceiling = true, npc_combine_camera = true }
 local shootFixed = false
 
-local GUN_MODEL       = "models/props_junk/PopCan01a.mdl"
-local EXPLOSIVE_MODEL = "models/bull/gates/logic_nano.mdl"
-local ROCKET_MODEL    = "models/weapons/w_missile_launch.mdl"
-local SEAT_MODEL      = "models/nova/airboat_seat.mdl"
-local ARMOR_MODEL     = "models/hunter/blocks/cube2x2x2.mdl"
+local MODELS = {
+    gun = "models/props_junk/PopCan01a.mdl", explosive = "models/bull/gates/logic_nano.mdl", rocket = "models/weapons/w_missile_launch.mdl",
+    seat = "models/nova/airboat_seat.mdl", armor = "models/hunter/blocks/cube2x2x2.mdl",
+}
 
 local me, chipEnt = owner(), chip()
 local UP = Vector(0, 0, 1)
@@ -167,7 +170,7 @@ queue(function()
     if not prop.canSpawn() then error("can't spawn props right now, so the XO-16 won't hurt", 0) end
     local ent = prop.createSent(pos + Vector(0, 0, PIVOT_Z), Angle(), "gmod_wire_turret", true, {
         delay = GUN_DELAY, damage = GUN_DAMAGE, force = 8, sound = "0", numbullets = 1,
-        spread = GUN_SPREAD, tracer = GUN_TRACER, tracernum = 1, Model = GUN_MODEL,
+        spread = GUN_SPREAD, tracer = GUN_TRACER, tracernum = 1, Model = MODELS.gun,
     })
     pcall(ent.setSolid, ent, false)
     ent:setNoDraw(true)
@@ -177,7 +180,7 @@ end)
 -- the pilot's seat, inside the chest
 queue(function()
     if not prop.canSpawn() then error("can't spawn the pilot seat right now", 0) end
-    local s = prop.createSeat(pos + Vector(-6, 0, 128), Angle(0, -90, 0), SEAT_MODEL, true)
+    local s = prop.createSeat(pos + Vector(-6, 0, 128), Angle(0, -90, 0), MODELS.seat, true)
     s:setNoDraw(true)
     pcall(s.setCollisionGroup, s, COLLISION_GROUP.DEBRIS)
     s:setParent(carrier)
@@ -188,11 +191,11 @@ end)
 if ARMOR then
     queue(function()
         if not prop.canSpawn() then return end
-        local ok, a = pcall(prop.create, pos + Vector(0, 0, 150), Angle(), ARMOR_MODEL, true)
+        local ok, a = pcall(prop.create, pos + Vector(0, 0, 150), Angle(), MODELS.armor, true)
         if not ok or not isValid(a) then say("no cockpit armour (couldn't spawn the block)") return end
         a:setNoDraw(true)
         pcall(a.setCollisionGroup, a, COLLISION_GROUP.PASSABLE_DOOR)
-        a:setParent(carrier)
+        a:setParent(anchor)                 -- (not the carrier: that one carries the seat out when you get out)
         armor = a
     end)
 end
@@ -205,7 +208,7 @@ local function growPool()
         if not prop.canSpawn() then boomFull = true return end
         local ok, e = pcall(prop.createSent, pos - Vector(0, 0, 300), Angle(), "gmod_wire_explosive", true, {
             damage = ROCKET_DAMAGE, radius = ROCKET_RADIUS, removeafter = false, delaytime = 0, delayreloadtime = 0,
-            explodeatzero = false, bulletproof = true, explosionproof = true, Model = EXPLOSIVE_MODEL,
+            explodeatzero = false, bulletproof = true, explosionproof = true, Model = MODELS.explosive,
         })
         if not ok or not isValid(e) then
             boomFull = true
@@ -315,14 +318,22 @@ end
 ----------------------------------------------------------------------------------------------
 -- Phases: drop -> kneel -> standup -> auto <-> mount -> pilot -> dismount -> auto
 
-local phase, phaseEnd = "drop", 0
+local phase, phaseEnd = "standby", 0   -- standby: not called in yet (CALL_KEY / !titan fall)
 local drop                 -- { from, to, t0, t1 }
 local mode, stayPos = "follow", nil
 local target
 local setTarget            -- (defined with the targeting code)
 
+local CALL = {}            -- calling the Titan in (and showing it)
+function CALL.show(ply)
+    net.start("mtShow")
+    net.writeBool(phase ~= "standby")
+    if ply then net.send(ply) else net.send() end
+end
+
 local function startDrop(at, facing)
     local now = timer.curtime()
+    local wasHidden = phase == "standby"
     local top = trace.line(at + Vector(0, 0, 80), at + Vector(0, 0, DROP_HEIGHT), nil, MASK.NPCSOLID_BRUSHONLY)
     local h = top.Hit and (top.HitPos.z - at.z - 300) or DROP_HEIGHT
     yaw = facing or yaw
@@ -335,6 +346,7 @@ local function startDrop(at, facing)
         drop = nil
         setBase("at_MP_embark_idle_blended", 1, 0, now)
         sound("standup")
+        if wasHidden then CALL.show() end
         return
     end
     local t1 = now + h / DROP_SPEED
@@ -343,7 +355,26 @@ local function startDrop(at, facing)
     phase, phaseEnd = "drop", t1
     setBase("at_hotdrop_drop_2knee_turbo", 1, 0, t1 - T_DROP_IMPACT)   -- lands on the animation's impact frame
     sound("drop", at + Vector(0, 0, 200))
+    if wasHidden then CALL.show() end
 end
+
+-- Titanfall where you aim (CALL_KEY on your game, or !titan fall). Only while it's free (not piloted, not mid-move).
+CALL.next = 0
+function CALL.titan()
+    local now = timer.curtime()
+    if now < CALL.next then return end
+    if not (phase == "standby" or phase == "auto" or phase == "kneel") then say("can't call it in right now") return end
+    CALL.next = now + 2
+    local eye = me:getEyePos()
+    local tr = trace.line(eye, eye + me:getEyeAngles():getForward() * 5000, { me, chipEnt }, MASK.NPCSOLID_BRUSHONLY)
+    local at = tr.Hit and tr.HitPos or (me:getPos() + Angle(0, me:getEyeAngles().y, 0):getForward() * 400)
+    local z = groundZ(at, 60)
+    if not z then say("no ground there") return end
+    mode = "follow"
+    startDrop(Vector(at.x, at.y, z), me:getEyeAngles().y + 180)   -- lands facing you
+    say("stand by for Titanfall")
+end
+net.receive("mtCall", function(_, ply) if ply == me then CALL.titan() end end)
 
 local function dropStep(now)
     local d = drop
@@ -542,7 +573,7 @@ local function fireRocket(now)
     local to = want.point or (from + Angle(0, yaw, 0):getForward() * 2000)
     local dir = (to - from):getNormalized()
     dir = (dir + Vector(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5) * 0.05):getNormalized()
-    local ok, h = pcall(hologram.create, from, dir:getAngle(), ROCKET_MODEL, Vector(1.7))
+    local ok, h = pcall(hologram.create, from, dir:getAngle(), MODELS.rocket, Vector(1.7))
     if not ok or not h then return end
     pcall(h.setTrails, h, 14, 0, 0.6, "trails/smoke", Color(220, 220, 220, 170), nil, false)
     rockets[#rockets + 1] = { holo = h, pos = from, vel = dir * ROCKET_SPEED, t = now }
@@ -1003,14 +1034,48 @@ local function tryEmbark(ply)
     if not ok then say("couldn't put you in the seat (" .. tostring(type(err) == "table" and err.message or err) .. ")") end
 end
 
+-- Getting out: the seat sits inside the chest, where the engine finds no free spot to put you and drops you on
+-- top of everything instead (way up in the air). So the seat is locked while you pilot, and E first moves the
+-- seat down onto the ground in front of the Titan, then lets you out from there.
+local EXIT = {}             -- getting out: EXIT.on = { at = where the seat goes, t }
+function EXIT.spot()
+    local fwd = Angle(0, yaw, 0):getForward()
+    for _, d in ipairs({ 150, 110, -150 }) do
+        local p = pos + fwd * d
+        local z = groundZ(p, 80)
+        if z and math.abs(z - pos.z) < 120 then return Vector(p.x, p.y, z) end
+    end
+    return pos
+end
+function EXIT.begin()
+    if EXIT.on or not isValid(seat) then return end
+    EXIT.on = { at = EXIT.spot(), t = timer.curtime() }
+    carrier:setPos(EXIT.on.at + Vector(6, 0, -126))
+    timer.simple(0.06, function()
+        if not isValid(seat) then EXIT.on = nil return end
+        pcall(seat.unlock, seat)
+        local ok = pcall(seat.ejectDriver, seat)
+        if not ok and isValid(pilot) then pcall(pilot.exitVehicle, pilot) end
+        timer.simple(0.3, function() EXIT.on = nil end)
+    end)
+end
+
 hook.add("KeyPress", "mtUse", function(ply, key)
-    if key == IN_KEY.USE then tryEmbark(ply) end
+    if key ~= IN_KEY.USE then return end
+    if ply == pilot then
+        if phase == "pilot" then EXIT.begin() end
+        return
+    end
+    tryEmbark(ply)
 end)
 
 hook.add("PlayerEnteredVehicle", "mtIn", function(ply, veh)
     if veh ~= seat then return end
     pilot = ply
     aimIn, keyWas = nil, {}
+    -- E is handled by the chip from now on (see EXIT.begin); if the server won't let it lock seats, E exits the
+    -- normal way and the PlayerLeaveVehicle fallback below tries to put you down in front
+    timer.simple(0.1, function() if isValid(seat) and pilot == ply then pcall(seat.lock, seat) end end)
     pcall(function() enableHud(ply, true) end)
     sendRole(ply, true)
     timer.simple(0.5, function() if isValid(ply) and pilot == ply then sendRole(ply, true) end end)
@@ -1034,13 +1099,18 @@ hook.add("PlayerLeaveVehicle", "mtOut", function(ply, veh)
     phase, phaseEnd = "dismount", now + T_DISMOUNT
     setBase("at_dismount_stand", 1, 0, now)
     sound("disembark")
-    -- down in front of it, if the server lets the chip move you (else you drop out of the chest)
-    local out = pos + Angle(0, yaw, 0):getForward() * 110
-    local z = groundZ(out, 60)
-    if z and clearLine(pos, out) then pcall(ply.setPos, ply, Vector(out.x, out.y, z + 4)) end
+    pcall(seat.unlock, seat)
+    -- (normal exits come out of the seat already on the ground; this is for when the chip couldn't lock the seat:
+    -- put you down in front of it, if the server lets chips move players)
+    if not EXIT.on then
+        local out = EXIT.spot() + Vector(0, 0, 4)
+        pcall(ply.setPos, ply, out)
+        timer.simple(0.05, function() if isValid(ply) and not ply:inVehicle() then pcall(ply.setPos, ply, out) end end)
+    end
 end)
 
 hook.add("ClientInitialized", "mtJoin", function(ply)
+    CALL.show(ply)
     sendBase(ply)
     sendAim(ply)
     if ply == pilot then sendRole(ply, true) end
@@ -1070,7 +1140,8 @@ local function hudState(now)
     net.send(pilot, true)
 end
 
-startDrop(pos, yaw)
+-- (waits for CALL_KEY / !titan fall instead of dropping in right away)
+say("ready - press " .. CALL_KEY_NAME .. " (or type !titan fall) to call in your Titan where you're aiming")
 
 local lastUpdate = timer.curtime()
 hook.add("think", "mtTitan", function()
@@ -1083,7 +1154,12 @@ hook.add("think", "mtTitan", function()
     dt = math.min(dt, 0.2)
     if not isValid(me) or not isValid(anchor) then return end
 
-    if phase == "drop" then
+    if phase == "standby" then
+        -- nothing to see yet: the (invisible) seat waits under the map so nobody can sit in it
+        anchor:setPos(pos)
+        carrier:setPos(pos - Vector(0, 0, 4000))
+        return
+    elseif phase == "drop" then
         dropStep(now)
     elseif phase == "landed" then
         if now >= phaseEnd then
@@ -1130,7 +1206,8 @@ hook.add("think", "mtTitan", function()
 
     anchor:setPos(pos)
     anchor:setAngles(Angle(0, yaw, 0))
-    carrier:setPos(pos)
+    -- the seat is (-6, 0, 128) from the carrier: while getting out it's put down on the ground in front
+    carrier:setPos(EXIT.on and (EXIT.on.at + Vector(6, 0, -126)) or pos)
 end)
 
 hook.add("PlayerSay", "mtChat", function(ply, text)
@@ -1144,9 +1221,9 @@ hook.add("PlayerSay", "mtChat", function(ply, text)
         if not cmd then return end
         cmd = string.lower(cmd)
     end
-    local free = phase == "auto" or phase == "kneel"
+    local free = phase == "auto" or phase == "kneel" or phase == "standby"
     if cmd == "" or cmd == "help" then
-        say("!titan stay / follow, !titan fall (Titanfall where you look), !titan home (Titanfall next to you), !titan fixed, !titan sounds. Press E next to it to get in.")
+        say("press " .. CALL_KEY_NAME .. " or !titan fall: Titanfall where you aim, !titan stay / follow, !titan home (Titanfall next to you), !titan fixed, !titan sounds. Press E next to it to get in.")
     elseif cmd == "sounds" then net.start("mtSndTest") net.send(me)
     elseif cmd == "stay" then mode, stayPos = "stay", pos say("holding here (still fights enemies near you)")
     elseif cmd == "follow" then mode = "follow" say("following you")
@@ -1155,14 +1232,10 @@ hook.add("PlayerSay", "mtChat", function(ply, text)
         if not shootFixed and isValid(target) and FIXED_CLASSES[target:getClass()] then setTarget(nil) end
         say("ceiling turrets and cameras " .. (shootFixed and "ARE targets now" or "are left alone"))
     elseif cmd == "fall" or cmd == "home" then
+        if cmd == "fall" then CALL.titan() return "" end
         if not free then say("not now") return "" end
-        local at
-        if cmd == "fall" then
-            local tr = me:getEyeTrace()
-            at = tr.HitPos
-        else
-            at = me:getPos() + flat(pos - me:getPos()):getNormalized() * 260
-        end
+        local away = phase == "standby" and Angle(0, me:getEyeAngles().y, 0):getForward() or flat(pos - me:getPos()):getNormalized()
+        local at = me:getPos() + away * 260
         local z = groundZ(at, 60)
         if not z then say("no ground there") return "" end
         mode = "follow"
@@ -1193,6 +1266,9 @@ local PARENT, REST_P, REST_Q, P2B, BONE_BY_NAME, BONE_NAME = {}, {}, {}, {}, {},
 local PIECES, ANIMS, SEQS, SEQ_BY_NAME, MATS = {}, {}, {}, {}, {}
 local BIN
 local MESHES
+-- the XO-16's magazine: its piece is hidden while reloading and a copy falls to the ground
+-- (the reload's mag-out / mag-in moments, as cycles of mp_stand_gesture_xo16_vanguard, from its sound events)
+local MAG = { piece = nil, c = nil, OUT = 0.08, IN = 0.44, drops = {}, g = nil }
 
 local function parseData(body)
     local lines = string.explode("\n", body)
@@ -1238,6 +1314,9 @@ local function parseData(body)
             SEQ_BY_NAME[string.lower(seq.name)] = seq
         elseif k == "ev" then
             if t[3] == "AE_FOOTSTEP_R" or t[3] == "AE_FOOTSTEP_L" then seq.ev[#seq.ev + 1] = tonumber(t[2]) end
+        elseif k == "mag" then
+            MAG.piece = tonumber(t[2]) + 1
+            MAG.c = { tonumber(t[3]), tonumber(t[4]), tonumber(t[5]) }
         elseif k == "sw" then
             seq.sw = {}
             for i = 2, #t do seq.sw[i - 1] = tonumber(t[i]) end
@@ -1535,6 +1614,7 @@ local function applyPieces()
                 m8, m9, m10, m11 = m8 + w * SK[o + 9], m9 + w * SK[o + 10], m10 + w * SK[o + 11], m11 + w * SK[o + 12]
             end
             pc.mat:setUnpacked(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11 - LIFT, 0, 0, 0, 1)
+            if pc.isMag then pc.m = { m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11 - LIFT } end
             h:setRenderMatrix(pc.mat)
         end
     end
@@ -1716,6 +1796,8 @@ local function createHolos()
         h:setMesh(ms)
         h:setMeshMaterial(MATS[pc.mat] and MATS[pc.mat].mat or nil)
         h:setRenderBounds(Vector(-320, -320, -200), Vector(320, 320, 260))
+        pc.material = MATS[pc.mat] and MATS[pc.mat].mat or nil
+        pc.isMag = MAG.piece == i
         pc.holo, pc.mat = h, Matrix()
         -- what the pilot still sees from the cockpit: the arms from the elbows down, the gun, the legs
         local main, mw = pc.bones[1], 0
@@ -2034,12 +2116,151 @@ end)
 ----------------------------------------------------------------------------------------------
 -- animate: ~30 times a second up close, less far away
 
+-- shown only once it's been called in (the server sends mtShow)
+local visible = false
+net.receive("mtShow", function() visible = net.readBool() end)
+
+-- the call key (your game only): the server drops the Titan where you're aiming
+local CALL_KEY = KEY and KEY[CALL_KEY_NAME]
+hook.add("inputPressed", "mtCallKey", function(key)
+    if key ~= CALL_KEY or player() ~= owner() or PILOT.on then return end
+    net.start("mtCall")
+    net.send()
+end)
+if player() == owner() and not CALL_KEY then say("there's no key called \"" .. CALL_KEY_NAME .. "\" - change CALL_KEY_NAME; !titan fall still works") end
+
+-- The eye: the Titan's glowing optic (its own glow texture isn't loaded) as an unlit blue dot plus a soft light.
+-- It's the glow patch around this point of the bind pose, carried by def_chest_laser_tone.
+local EYE_BONE_NAME, EYE_BIND = "def_chest_laser_tone", { 0, 139.8, 26.7 }
+local EYE_COLOR = Color(90, 185, 255)
+local eye = { holo = nil, light = nil, pos = nil, tried = false }
+
+local function eyeUpdate()
+    local b = BONE_BY_NAME[EYE_BONE_NAME]
+    if not b then return end
+    local o, x, y, z = b * 12 - 12, EYE_BIND[1], EYE_BIND[2], EYE_BIND[3]
+    local lp = Vector(SK[o + 1] * x + SK[o + 2] * y + SK[o + 3] * z + SK[o + 4],
+                      SK[o + 5] * x + SK[o + 6] * y + SK[o + 7] * z + SK[o + 8],
+                      SK[o + 9] * x + SK[o + 10] * y + SK[o + 11] * z + SK[o + 12])
+    eye.pos = anchor:localToWorld(lp)
+    if not eye.tried then
+        eye.tried = true
+        if hologram.canSpawn() then
+            local ok, h = pcall(hologram.create, eye.pos, anchor:getAngles(), "models/holograms/hq_sphere.mdl", Vector(0.4))
+            if ok and h then
+                eye.holo = h
+                pcall(h.setMaterial, h, "models/debug/debugwhite")
+                pcall(h.setColor, h, EYE_COLOR)
+                pcall(h.suppressEngineLighting, h, true)
+                h:setParent(anchor)
+            end
+        end
+        if light and light.create then
+            local ok, l = pcall(light.create, eye.pos, 150, 2, EYE_COLOR)
+            if ok then eye.light = l end
+        end
+    end
+    if eye.holo and eye.holo:isValid() then eye.holo:setPos(eye.pos) end
+end
+
+-- A dropped magazine: a copy of the mag piece in its own hologram (not parented, so it stays where it fell), which
+-- falls, tumbling, until it hits the ground under it, lies there a few seconds and goes.
+function MAG.drop(now)
+    local pc = PIECES[MAG.piece]
+    if not pc or not pc.m or not MAG.c or not MESHES[pc.obj] or not hologram.canSpawn() then return end
+    if #MAG.drops >= 3 then local old = table.remove(MAG.drops, 1) if old.h:isValid() then old.h:remove() end end
+    local m, c = pc.m, MAG.c
+    local cl = { m[1] * c[1] + m[2] * c[2] + m[3] * c[3] + m[4],      -- its centre, in the hologram's own space
+                 m[5] * c[1] + m[6] * c[2] + m[7] * c[3] + m[8],
+                 m[9] * c[1] + m[10] * c[2] + m[11] * c[3] + m[12] }
+    local org = anchor:localToWorld(Vector(0, 0, LIFT))
+    local ok, h = pcall(hologram.create, org, anchor:getAngles(), MESH_MODEL, Vector(1))
+    if not ok or not h then return end
+    h:setMesh(MESHES[pc.obj])
+    h:setMeshMaterial(pc.material)
+    h:setRenderBounds(Vector(-400, -400, -400), Vector(400, 400, 400))
+    -- the ground under it, in the same space (the Titan only ever turns about its up axis)
+    local cw = anchor:localToWorld(Vector(cl[1], cl[2], cl[3] + LIFT))
+    local tr = trace.line(cw, cw - Vector(0, 0, 1500), nil, MASK.NPCSOLID_BRUSHONLY)
+    local gz = (tr.Hit and tr.HitPos.z or (anchor:getPos().z)) - org.z + 5
+    local d = { h = h, mat = Matrix(), m = m, c = cl, t0 = now, gz = gz, rest = nil,
+                vy = -25 - math.random() * 25, vz = 40, spin = (math.random() < 0.5 and -1 or 1) * (220 + math.random() * 160) }
+    MAG.drops[#MAG.drops + 1] = d
+    MAG.place(d, 0)
+end
+
+function MAG.place(d, t)
+    local dy, dz = d.vy * t, d.vz * t - 400 * t * t
+    if d.c[3] + dz <= d.gz then
+        -- landed: stays as it is
+        if not d.rest then d.rest = t end
+        t = d.rest
+        dy, dz = d.vy * t, d.gz - d.c[3]
+    end
+    local a = math.rad(d.spin * t)
+    local ca, sa = math.cos(a), math.sin(a)
+    local m, c = d.m, d.c
+    -- turn about its own centre (around the Titan's forward axis), then move
+    local vx, vy, vz = m[4] - c[1], m[8] - c[2], m[12] - c[3]
+    d.mat:setUnpacked(
+        m[1], m[2], m[3], vx + c[1],
+        ca * m[5] - sa * m[9], ca * m[6] - sa * m[10], ca * m[7] - sa * m[11], ca * vy - sa * vz + c[2] + dy,
+        sa * m[5] + ca * m[9], sa * m[6] + ca * m[10], sa * m[7] + ca * m[11], sa * vy + ca * vz + c[3] + dz,
+        0, 0, 0, 1)
+    d.h:setRenderMatrix(d.mat)
+end
+
+-- follows the reload gesture: mag out (hide + drop), mag in (show again)
+function MAG.step(now)
+    if not MAG.piece then return end
+    local pc = PIECES[MAG.piece]
+    local g = gestures.reload
+    if g and g.seq.name ~= "mp_stand_gesture_xo16_vanguard" then g = nil end
+    if g ~= MAG.g then
+        if MAG.g and MAG.hidden and pc and pc.holo and pc.holo:isValid() then pc.holo:setNoDraw(PILOT.cockpit and not pc.cockpit) end
+        MAG.g, MAG.dropped, MAG.hidden = g, false, false
+    end
+    if g then
+        local cyc = cycleOf(g, now)
+        if not MAG.dropped and cyc >= MAG.OUT and cyc < MAG.IN then
+            MAG.dropped, MAG.hidden = true, true
+            if pc and pc.holo and pc.holo:isValid() then pc.holo:setNoDraw(true) end
+            if now - g.start < 2 then MAG.drop(now) end          -- (not for a reload that was already going when you joined)
+        elseif MAG.hidden and cyc >= MAG.IN then
+            MAG.hidden = false
+            if pc and pc.holo and pc.holo:isValid() then pc.holo:setNoDraw(PILOT.cockpit and not pc.cockpit) end
+        end
+    end
+    for i = #MAG.drops, 1, -1 do
+        local d = MAG.drops[i]
+        local t = now - d.t0
+        if t > 8 or not d.h:isValid() then
+            if d.h:isValid() then d.h:remove() end
+            table.remove(MAG.drops, i)
+        elseif not d.rest or t - d.rest < 0.2 then
+            MAG.place(d, t)
+        end
+    end
+end
+
 local lastUpdate, shown, lastSnd, cockpitWas = 0, false, 0, false
 hook.add("think", "mtAnim", function()
     local now = timer.curtime()
     pilotThink(now)
     if not ready or not base or not anchor or not anchor:isValid() then return end
+    if not visible then
+        if shown then
+            shown = false
+            for _, pc in ipairs(PIECES) do if pc.holo and pc.holo:isValid() then pc.holo:setNoDraw(true) end end
+            if eye.holo and eye.holo:isValid() then eye.holo:setNoDraw(true) end
+        end
+        return
+    end
     if now - lastSnd > 0.1 then lastSnd = now sounds() end
+    -- the eye's light has to be renewed every frame
+    if eye.light and eye.pos and not PILOT.cockpit then
+        pcall(function() eye.light:setPos(eye.pos) eye.light:draw() end)
+    end
     local d2 = player():getEyePos():getDistanceSqr(anchor:getPos())
     local rate = (d2 > 16000000 and not PILOT.on) and 6 or ((d2 > 4000000 and not PILOT.on) and 15 or UPDATE_RATE)
     if now - lastUpdate < 1 / rate then return end
@@ -2049,10 +2270,13 @@ hook.add("think", "mtAnim", function()
     evaluate(now, dt)
     computeSkin()
     applyPieces()
+    eyeUpdate()
+    MAG.step(now)
     if not shown or cockpitWas ~= PILOT.cockpit then
         shown, cockpitWas = true, PILOT.cockpit
         for _, pc in ipairs(PIECES) do
-            if pc.holo and pc.holo:isValid() then pc.holo:setNoDraw(PILOT.cockpit and not pc.cockpit) end
+            if pc.holo and pc.holo:isValid() then pc.holo:setNoDraw((PILOT.cockpit and not pc.cockpit) or (pc.isMag and MAG.hidden)) end
         end
+        if eye.holo and eye.holo:isValid() then eye.holo:setNoDraw(PILOT.cockpit) end
     end
 end)
