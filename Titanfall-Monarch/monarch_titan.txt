@@ -283,11 +283,14 @@ local function sound(name, at)             -- a one-off sound on everyone's game
     net.send()
 end
 
-local voiceUntil, nextVoice = 0, {}
+-- Voice lines: at least VOICE_GAP seconds between any two lines, and each kind of line only every so often
+-- (embarking always gets its line, it's your own doing)
+local voiceUntil, nextVoice = 0, { GAP = 15, EVERY = { kill = 35, alert = 30, outnumbered = 60, embark = 0 } }
 local function voice(kind, force)
     local now = timer.curtime()
     if not force and (now < voiceUntil or now < (nextVoice[kind] or 0)) then return end
-    voiceUntil = now + 4
+    voiceUntil = now + nextVoice.GAP
+    nextVoice[kind] = now + (nextVoice.EVERY[kind] or 0)
     net.start("mtVoice")
     net.writeString(kind)
     net.writeUInt(math.random(VOICES[kind]), 8)
@@ -1152,7 +1155,6 @@ local function chatter(now)
     if killWatch and now - killWatch.t < 2.5 and (not isValid(killWatch.e) or killWatch.e:getHealth() <= 0) then
         killWatch = nil
         voice("kill")
-        nextVoice.kill = now + 12
     elseif killWatch and now - killWatch.t >= 2.5 then
         killWatch = nil
     end
