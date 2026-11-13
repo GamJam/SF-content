@@ -1907,10 +1907,10 @@ end)
 local FX_FILES = { xo16_loop = "xo16_loop.wav", xo16_tail = "xo16_tail.wav", step = "step.wav", rocket = "rocket.wav",
                    dash = "dash.wav", melee = "melee.wav", impact = "impact.wav" }
 local FX_RANGE = { xo16_loop = 4000, xo16_tail = 4000, step = 2600, rocket = 3500, dash = 2500, melee = 2500, impact = 4000 }
-local VOLUME   = 0.75
--- the gun and the footsteps boosted past full volume (Starfall allows up to 10; their files are also mastered
--- louder, see sounds_monarch.ps1). Turn these down if they get too much.
-local FX_VOL   = { xo16_loop = 2.5, xo16_tail = 2, step = 1.6, rocket = 1.2, dash = 0.8 * VOLUME, melee = VOLUME, impact = 1.2 }
+-- Every sound file is levelled to the same loudness (sounds_monarch.ps1), so they all play at this one volume:
+-- one knob for the whole Titan (Starfall allows up to 10)
+local VOLUME   = 2
+local FX_VOL   = { xo16_loop = VOLUME, xo16_tail = VOLUME, step = VOLUME, rocket = VOLUME, dash = VOLUME, melee = VOLUME, impact = VOLUME }
 local LOOPS    = { xo16_loop = true }
 local ONCE_FILES = { drop = "drop.wav", standup = "standup.wav", embark = "embark.wav", disembark = "disembark.wav",
                      reload = "reload.wav", pod = "pod.wav", melee_hit = "melee_hit.wav" }
