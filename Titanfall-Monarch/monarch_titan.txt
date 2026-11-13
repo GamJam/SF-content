@@ -325,37 +325,64 @@ local target
 local setTarget            -- (defined with the targeting code)
 
 local CALL = {}            -- calling the Titan in (and showing it)
+CALL.visible = false
+CALL.DELAY = 5             -- seconds from calling it in to the landing (the landing zone counts down meanwhile)
 function CALL.show(ply)
     net.start("mtShow")
-    net.writeBool(phase ~= "standby")
+    net.writeBool(CALL.visible)
+    if ply then net.send(ply) else net.send() end
+end
+function CALL.sendMarker(ply)
+    local m = CALL.marker
+    if not m then return end
+    net.start("mtMarker")
+    net.writeVector(m.at)
+    net.writeFloat(m.yaw)
+    net.writeDouble(m.t1)
     if ply then net.send(ply) else net.send() end
 end
 
+-- a Titanfall: the landing zone shows up and counts down (phase "incoming", the Titan unseen), then it falls in
+-- so it lands right as the countdown ends
 local function startDrop(at, facing)
     local now = timer.curtime()
-    local wasHidden = phase == "standby"
     local top = trace.line(at + Vector(0, 0, 80), at + Vector(0, 0, DROP_HEIGHT), nil, MASK.NPCSOLID_BRUSHONLY)
     local h = top.Hit and (top.HitPos.z - at.z - 300) or DROP_HEIGHT
     yaw = facing or yaw
     vel, airborne = Vector(), false
     if setTarget then setTarget(nil) end
-    if h < 600 then
-        -- no room overhead: it's just there, on one knee
-        pos = at
-        phase, phaseEnd = "kneel", now + KNEEL_WAIT
+    local fall = h >= 600 and h / DROP_SPEED or 0        -- (no room overhead: it just appears on one knee)
+    local t1 = now + math.max(CALL.DELAY, fall + 0.5)
+    drop = { from = at + Vector(0, 0, h), to = at, t0 = t1 - fall, t1 = t1, room = fall > 0 }
+    pos = at
+    phase, phaseEnd = "incoming", drop.t0
+    CALL.visible = false
+    CALL.show()
+    CALL.marker = { at = at, yaw = yaw, t1 = t1 }
+    CALL.sendMarker()
+    if drop.room then
+        timer.simple(math.max(0, t1 - 2.4 - now), function()   -- the drop sound builds up for ~1.9 s before the hit
+            if drop and drop.t1 == t1 then sound("drop", at + Vector(0, 0, 200)) end
+        end)
+    end
+end
+
+-- the countdown ran down to its fall: the Titan appears up high (or, without room overhead, already kneeling)
+function CALL.arrive(now)
+    local d = drop
+    CALL.visible = true
+    CALL.show()
+    if d.room then
+        pos = d.from
+        phase, phaseEnd = "drop", d.t1
+        setBase("at_hotdrop_drop_2knee_turbo", 1, 0, d.t1 - T_DROP_IMPACT)   -- lands on the animation's impact frame
+    else
+        pos = d.to
         drop = nil
+        phase, phaseEnd = "kneel", now + KNEEL_WAIT
         setBase("at_MP_embark_idle_blended", 1, 0, now)
         sound("standup")
-        if wasHidden then CALL.show() end
-        return
     end
-    local t1 = now + h / DROP_SPEED
-    drop = { from = at + Vector(0, 0, h), to = at, t0 = now, t1 = t1 }
-    pos = drop.from
-    phase, phaseEnd = "drop", t1
-    setBase("at_hotdrop_drop_2knee_turbo", 1, 0, t1 - T_DROP_IMPACT)   -- lands on the animation's impact frame
-    sound("drop", at + Vector(0, 0, 200))
-    if wasHidden then CALL.show() end
 end
 
 -- Titanfall where you aim (CALL_KEY on your game, or !titan fall). Only while it's free (not piloted, not mid-move).
@@ -1090,7 +1117,7 @@ end)
 hook.add("PlayerLeaveVehicle", "mtOut", function(ply, veh)
     if veh ~= seat then return end
     pilot = nil
-    pcall(function() enableHud(ply, false) end)
+    if ply ~= me then pcall(function() enableHud(ply, false) end) end   -- (you keep it for the landing zone countdown)
     sendRole(ply, false)
     want.fire, want.point, want.salvo, want.punch, want.reload = false, nil, false, false, false
     sprinting, dash = false, nil
@@ -1111,6 +1138,9 @@ end)
 
 hook.add("ClientInitialized", "mtJoin", function(ply)
     CALL.show(ply)
+    if phase == "incoming" then CALL.sendMarker(ply) end
+    -- your screen shows the landing zone's countdown, which needs the chip's HUD
+    if ply == me then pcall(function() enableHud(me, true) end) end
     sendBase(ply)
     sendAim(ply)
     if ply == pilot then sendRole(ply, true) end
@@ -1154,8 +1184,9 @@ hook.add("think", "mtTitan", function()
     dt = math.min(dt, 0.2)
     if not isValid(me) or not isValid(anchor) then return end
 
-    if phase == "standby" then
+    if phase == "standby" or phase == "incoming" then
         -- nothing to see yet: the (invisible) seat waits under the map so nobody can sit in it
+        if phase == "incoming" and now >= drop.t0 then CALL.arrive(now) end
         anchor:setPos(pos)
         carrier:setPos(pos - Vector(0, 0, 4000))
         return
@@ -2081,13 +2112,97 @@ local function pilotThink(now)
     end
 end
 
+----------------------------------------------------------------------------------------------
+-- The landing zone: glowing rings on the ground where it'll land, one closing in as the countdown runs, an
+-- arrow the way it'll face, a beam up into the sky, and a beep every second. Everyone sees it; the ETA readout
+-- is on the owner's screen (drawhud below).
+
+local MARK = { holos = {}, at = nil, t1 = 0, yaw = 0, lastBeep = nil, gone = 0 }
+MARK.COLOR = { 70, 170, 255 }
+MARK.R = 150                   -- radius of the zone (a bit wider than the Titan's footprint)
+
+function MARK.clear()
+    for _, h in pairs(MARK.holos) do if h and h:isValid() then h:remove() end end
+    MARK.holos = {}
+end
+
+function MARK.part(name, model, at, ang, scale, alpha)
+    if not hologram.canSpawn() then return end
+    local ok, h = pcall(hologram.create, at, ang, model, scale)
+    if not ok or not h then return end
+    pcall(h.setMaterial, h, "models/debug/debugwhite")
+    pcall(h.suppressEngineLighting, h, true)
+    pcall(h.setColor, h, Color(MARK.COLOR[1], MARK.COLOR[2], MARK.COLOR[3], alpha))
+    MARK.holos[name] = h
+end
+
+net.receive("mtMarker", function()
+    local at, yaw, t1 = net.readVector(), net.readFloat(), net.readDouble()
+    MARK.clear()
+    MARK.at, MARK.yaw, MARK.t1, MARK.lastBeep = at, yaw, t1, nil
+    local up = at + Vector(0, 0, 2)
+    -- (Wire's hologram models are 12 units across at scale 1)
+    local R = MARK.R
+    MARK.part("disc",  "models/holograms/hq_cylinder.mdl",   up, Angle(), Vector(R / 6, R / 6, 0.04), 45)
+    MARK.part("outer", "models/holograms/hq_torus_thin.mdl", up, Angle(), Vector(R / 6, R / 6, 1.2), 220)
+    MARK.part("inner", "models/holograms/hq_torus_thin.mdl", up, Angle(), Vector(R / 9, R / 9, 1.2), 160)
+    MARK.part("close", "models/holograms/hq_torus_thin.mdl", up, Angle(), Vector(R / 2, R / 2, 2), 200)
+    MARK.part("arrow", "models/holograms/cube.mdl", up + Angle(0, yaw, 0):getForward() * (R * 0.55), Angle(0, yaw, 0), Vector(R / 12, 0.7, 0.15), 230)
+    MARK.part("tip",   "models/holograms/hq_cone.mdl", up + Angle(0, yaw, 0):getForward() * (R * 1.05), Angle(90, yaw, 0), Vector(2, 2, 2.2), 230)
+    MARK.part("beam",  "models/holograms/hq_cylinder.mdl",   at + Vector(0, 0, 1500), Angle(), Vector(0.9, 0.9, 250), 70)
+end)
+
+function MARK.step(now)
+    if not MARK.at then return end
+    local left = MARK.t1 - now
+    if left < -0.4 then MARK.clear() MARK.at = nil return end
+    local H = MARK.holos
+    local f = math.clamp(1 - left / 5, 0, 1)                -- 0 when called in, 1 at the landing
+    local pulse = 0.5 + 0.5 * math.sin(now * (6 + f * 14))  -- pulses faster as it gets close
+    local up = MARK.at + Vector(0, 0, 2)
+    if H.outer and H.outer:isValid() then H.outer:setAngles(Angle(0, now * 40, 0)) end
+    if H.inner and H.inner:isValid() then H.inner:setAngles(Angle(0, -now * 70, 0)) end
+    if H.close and H.close:isValid() then
+        local r = MARK.R * (1 + 2.2 * (1 - f))               -- closes in from far outside onto the zone
+        H.close:setScale(Vector(r / 6, r / 6, 2))
+        H.close:setPos(up + Vector(0, 0, 2))
+        H.close:setColor(Color(MARK.COLOR[1], MARK.COLOR[2], MARK.COLOR[3], 120 + 120 * pulse))
+    end
+    if H.disc and H.disc:isValid() then H.disc:setColor(Color(MARK.COLOR[1], MARK.COLOR[2], MARK.COLOR[3], 30 + 50 * pulse * f)) end
+    if H.beam and H.beam:isValid() then H.beam:setColor(Color(MARK.COLOR[1], MARK.COLOR[2], MARK.COLOR[3], 40 + 60 * pulse)) end
+    -- a beep each second, and quicker ones over the last two
+    local step = left > 2 and 1 or 0.5
+    local tick = math.ceil(left / step)
+    if left > 0 and tick ~= MARK.lastBeep then
+        MARK.lastBeep = tick
+        local d = player():getPos():getDistance(MARK.at)
+        if d < AUDIO_MAX and H.disc and H.disc:isValid() then
+            pcall(H.disc.emitSound, H.disc, "buttons/blip1.wav", 75, left > 2 and 110 or 135, 0.8 * (1 - d / AUDIO_MAX))
+        end
+    end
+end
+
 local fontBig, fontSmall
 hook.add("drawhud", "mtHud", function()
-    if not PILOT.on then return end
     if not fontBig then
         fontBig = render.createFont("Roboto", 30, 600, true)
         fontSmall = render.createFont("Roboto", 18, 500, true)
     end
+    -- the landing zone's ETA, over the zone itself
+    if MARK.at and player() == owner() then
+        local left = MARK.t1 - timer.curtime()
+        if left > -0.3 then
+            local sp = (MARK.at + Vector(0, 0, 90)):toScreen()
+            if sp and sp.visible then
+                render.setFont(fontBig)
+                render.setColor(Color(MARK.COLOR[1], MARK.COLOR[2], MARK.COLOR[3], 255))
+                render.drawSimpleText(sp.x, sp.y - 18, "TITANFALL", 1, 1)
+                render.setColor(Color(235, 245, 255))
+                render.drawSimpleText(sp.x, sp.y + 14, left > 0 and string.format("ETA %.1f", left) or "IMPACT", 1, 1)
+            end
+        end
+    end
+    if not PILOT.on then return end
     local w, h = render.getGameResolution()
     local cx, cy = w / 2, h / 2
     render.setColor(Color(120, 220, 255, 220))
@@ -2248,6 +2363,7 @@ local lastUpdate, shown, lastSnd, cockpitWas = 0, false, 0, false
 hook.add("think", "mtAnim", function()
     local now = timer.curtime()
     pilotThink(now)
+    MARK.step(now)
     if not ready or not base or not anchor or not anchor:isValid() then return end
     if not visible then
         if shown then
