@@ -1997,7 +1997,7 @@ local function playSlot(slot, file, range, at, follow)
         sl.snd, sl.follow = snd, follow
         pcall(function()
             snd:setPos(at or sndPos())
-            snd:setVolume(VOLUME)
+            snd:setVolume(slot == "voice" and VOLUME * 0.5 or VOLUME)   -- the voice at half the rest
             fade(snd, range)
             snd:play()
         end)
