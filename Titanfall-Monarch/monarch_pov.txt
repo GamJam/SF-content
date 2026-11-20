@@ -1,0 +1,331 @@
+titan 1 32 24 14 12
+# models/weapons/titan_xo16_shorty/atpov_xo16shorty.mdl (Titanfall 2 - Titans addon), exported for Starfall. Indices are 0-based.
+# mat <i> <png> <texture path in the game>
+mat 1 monarch_pov_1.png materials/models/weapons_r2/xo16_shorty_titan/xo16_shorty_titan_col.vtf
+mat 3 monarch_pov_3.png materials/models/weapons_r2/xo16_a2_titan/xo16_a2_titan_col.vtf
+mat 5 monarch_pov_5.png materials/models/titans/cockpit/atlas/titan_cockpit_col.vtf
+mat 6 monarch_pov_6.png materials/models/titans/cockpit/atlas/cockpit_screen_col.vtf
+mat 8 monarch_pov_8.png materials/models/titans/cockpit/atlas/ajax_cockpit_console_pov_col.vtf
+mat 10 monarch_pov_10.png materials/models/titans_r2/medium_vanguard/warpaint/warpaint_01/t_m_vanguard_prime_warpaint_skin01_col.vtf
+# bone <i> <parent> <name> <rest pos xyz> <rest quat xyzw> <poseToBone 3x4 row-major>
+bone 0 -1 jx_c_delta 0 0 0 0 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0
+bone 1 0 jx_c_pov 0 205.4121 0 0 0 0 1 1 0 0 0 0 1 0 -205.41214 0 0 1 0
+bone 2 0 def_c_hip 0 128.3826 0 0 0 0 1 1 0 0 0 0 1 0 -128.382584 0 0 1 0
+bone 3 2 def_c_spineA 0 0 0 0 0 0 1 1 0 0 0 0 1 0 -128.382584 0 0 1 0
+bone 4 3 def_c_spineB 0 18.2303 0 0 0 0 1 1 0 0 0 0 1 0 -146.612915 0 0 1 0
+bone 5 4 def_c_spineC 0 18.1019 0 0 0 0 1 1 0 0 0 0 1 0 -164.714859 0 0 1 0
+bone 6 5 def_l_clav 21.4407 20.612 -10.1848 0 0 0 1 1 0 0 -21.440704 0 1 0 -185.326813 0 0 1 10.184802
+bone 7 6 def_l_shoulder 26.6783 0 0 -0.000049 0 0.000269 1 1 0.000538 0 -48.218719 -0.000538 1 -0.000097 -185.30188 0 0.000097 1 10.166749
+bone 8 7 def_l_shoulderMid 14.5778 -0.0429 0 0.000095 0 -0.000276 1 1 -0.000014 0 -62.69408 0.000014 1 0.000094 -185.291687 0 -0.000094 1 10.202144
+bone 9 8 def_l_elbow 30.954 -0.0112 0 0.000011 0 -0.000354 1 1 -0.000722 0 -93.517036 0.000722 1 0.000116 -185.34642 0 -0.000116 1 10.206314
+bone 10 9 def_l_wrist 33.9622 -0.0092 0 -0.000047 0 -0.00001 1 1 -0.000741 0 -127.475662 0.000741 1 0.000023 -185.340607 0 -0.000023 1 10.188988
+bone 11 5 def_r_clav -21.4407 20.6119 -10.1848 -1 0 0 0 1 0 0 21.440704 0 -1 0 185.326797 0 0 -1 -10.184855
+bone 12 11 def_r_shoulder -26.6781 0 0 -0.00005 0 0.000275 1 1 -0.00055 0 48.220665 -0.00055 -1 0.0001 185.301331 0 -0.0001 -1 -10.16632
+bone 13 12 def_r_shoulderMid -14.5779 0.043 0 0.000095 0 -0.000275 1 1 0 0 62.69672 0 -1 -0.00009 185.290833 0 0.00009 -1 -10.201517
+bone 14 13 def_r_elbow -30.9539 0.0112 0 0.000014 0 -0.000368 1 1 0.000737 0 93.514046 0.000737 -1 -0.000119 185.348328 0 0.000119 -1 -10.206781
+bone 15 14 def_r_wrist -33.9625 0.0095 0 -0.000045 0 0 1 1 0.000737 0 127.476563 0.000737 -1 -0.000029 185.339783 0 0.000029 -1 -10.190123
+bone 16 -1 ja_c_propGun 0 0 0 0 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0
+bone 17 16 weapon_bone 0 0 0 0 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0
+bone 18 17 def_c_base 0 0 0 0 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0
+bone 19 18 def_c_bolt 0 9.194 33.4782 0 0 0 1 1 0 0 0 0 1 0 -9.193995 0 0 1 -33.478226
+bone 20 18 def_c_scope 0 17.982 45.5725 0 0 0 1 1 0 0 -0.000001 0 1 0 -17.981955 0 0 1 -45.572487
+bone 21 18 def_c_handle_3 4.5362 12.4119 58.8947 0 0 0 1 1 0 0 -4.536246 0 1 0 -12.411861 0 0 1 -58.894749
+bone 22 18 def_c_handle_4 4.3857 14.3839 17.3607 0 0 0 1 1 0 0 -4.385706 0 1 0 -14.383868 0 0 1 -17.360729
+bone 23 18 def_c_handle_5 3.4863 10.7835 -16.2974 0 0 0 1 1 0 0 -3.486273 0 1 0 -10.783509 0 0 1 16.297394
+bone 24 18 def_c_wheel_inner 5.2076 7.3598 29.5126 0 0 0 1 1 0 0 -5.207565 0 1 0 -7.359781 0 0 1 -29.512611
+bone 25 18 def_c_wheel_outer 9.1216 7.3598 27.0168 0 0 0 1 1 0 0 -9.121553 0 1 0 -7.359781 0 0 1 -27.016846
+bone 26 18 def_c_bolt_lock 3.8856 9.3411 11.1229 0 0 0 1 1 0 0 -3.885601 0 1 0 -9.34107 0 0 1 -11.122865
+bone 27 18 def_c_magazine_grip_far -1.6095 3.5156 31.8548 0 0 0 1 1 0 0 1.609481 0 1 0 -3.515631 0 0 1 -31.85478
+bone 28 18 def_c_magazine_grip_near_1 4.3485 7.044 23.3606 0 0 0 1 1 0 0 -4.348531 0 1 0 -7.044025 0 0 1 -23.36063
+bone 29 28 def_c_magazine_grip_near_2 5.9806 -4.8012 1.6958 0 0 0 1 1 0 0 -10.329149 0 1 0 -2.242775 0 0 1 -25.056417
+bone 30 -1 def_c_magazine 7.5096 -6.3559 31.496 0 0 0 1 1 0 0 -7.509586 0 1 0 6.355854 0 0 1 -31.496
+bone 31 1 jx_c_camera 0 0 0 0 0 0 1 1 0 0 0 0 1 0 -205.41214 0 0 1 0
+# piece <i> <obj name> <triangles> <material> <n> <bone 1> <weight 1> ...: render matrix = sum of weight * S(bone), S = boneToModel * poseToBone
+piece 0 p0 722 10 1 6 1
+piece 1 p1 1816 10 1 7 1
+piece 2 p2 1622 10 1 9 1
+piece 3 p3 1930 10 1 10 1
+piece 4 p4 722 10 1 11 1
+piece 5 p5 1816 10 1 12 1
+piece 6 p6 1622 10 1 14 1
+piece 7 p7 1930 10 1 15 1
+piece 8 p8 14190 1 1 18 1
+piece 9 p9 218 1 1 19 1
+piece 10 p10 1778 1 1 20 1
+piece 11 p11 212 1 1 21 1
+piece 12 p12 212 1 1 22 1
+piece 13 p13 212 1 1 23 1
+piece 14 p14 448 1 1 24 1
+piece 15 p15 96 1 1 25 1
+piece 16 p16 195 1 1 26 1
+piece 17 p17 176 1 1 27 1
+piece 18 p18 1141 1 1 28 1
+piece 19 p19 518 1 1 29 1
+piece 20 p20 1622 3 1 30 1
+piece 21 p21 2130 5 1 31 1
+piece 22 p22 576 6 1 31 1
+piece 23 p23 10793 8 1 31 1
+# mag <piece> <centre xyz, bind pose>: the gun's magazine (hidden and dropped on reload)
+# att <name> <bone> <3x4 matrix in bone space, row-major>
+att CAMERA_BASE 1 0 1 0 0 0 0 1 0 1 0 0 0
+att CAMERA 31 0 1 0 0 0 0 1 0 1 0 0 0
+att SWAY_ROTATE 17 0 -1 0 0 0 0 -1 0 1 0 0 0
+# anim <i> <name> <fps> <frames> <flags: 1 loop, 4 delta> <bin offset> <bytes per frame>
+#   ar/ap <bones with a rotation/position track, in .bin order: per frame qx qy qz qw (int16/32767) then x y z (int16/64)>
+#   cr <bone> <quat> / cp <bone> <pos>: constant values that differ from the default (rest pose, or identity for deltas)
+anim 0 idle_anim 30 61 5 0 0
+ar
+ap
+anim 1 idle_ads_anim 30 61 5 0 0
+ar
+ap
+anim 2 attack_anim 30 16 4 0 100
+ar 7 9 10 12 14 15 16 21 22 23 30
+ap 16 30
+cp 7 0.0017 0 0
+cp 9 0.0039 -0.0034 0
+cp 10 0.0002 -0.0014 0
+cp 12 -0.0015 0 0
+cp 14 -0.0037 0.0034 0
+cp 15 -0.0006 0.0016 0
+cp 21 0.001 0.0013 0.0023
+cp 22 0.0028 0.0006 0.0008
+cp 23 0.0018 0.0019 0
+anim 3 attack_ads_anim 30 16 4 1600 100
+ar 7 9 10 12 14 15 16 21 22 23 30
+ap 16 30
+cp 7 0.0017 0 0
+cp 9 0.0039 -0.0034 0
+cp 10 0.0002 -0.0014 0
+cp 12 -0.0015 0 0
+cp 14 -0.0037 0.0034 0
+cp 15 -0.0006 0.0016 0
+cp 21 0.001 0.0013 0.0023
+cp 22 0.0028 0.0006 0.0008
+cp 23 0.0018 0.0019 0
+anim 4 @reload_seq 30 145 0 3200 234
+ar 6 7 9 10 12 14 15 16 21 22 23 24 25 27 28 29 30 31
+ap 7 10 12 13 14 15 16 19 20 21 24 25 26 27 30
+cr 0 0.499999 0.499999 0.499999 0.500004
+cp 0 0 0 -206
+cr 8 0 0 0 1
+cp 8 14.5781 -0.0349 0
+cp 9 30.954 -0.0347 0
+cr 11 -0.827871 0.048045 -0.558799 -0.008099
+cr 13 0 0 0 1
+anim 5 @reload_empty_seq 30 145 0 37130 232
+ar 6 7 9 10 12 14 15 16 21 22 23 25 27 28 29 30 31
+ap 7 8 10 12 13 14 15 16 19 20 21 24 25 26 27 30
+cr 0 0.499999 0.499999 0.499999 0.500004
+cp 0 0 0 -206
+cr 8 0 0 0 1
+cp 9 30.954 -0.0347 0
+cr 11 -0.827871 0.048045 -0.558799 -0.008099
+cr 13 0 0 0 1
+anim 6 @draw_seq 30 31 0 70770 114
+ar 6 7 9 10 12 14 15 16 21 22 23 30
+ap 14 16 30
+cr 0 0.499999 0.499999 0.499999 0.500004
+cp 0 0 0 -206
+cp 7 26.6743 0 0
+cr 8 0 0 0 1
+cp 8 14.5703 -0.0349 0
+cp 9 30.954 -0.0347 0
+cp 10 33.9661 -0.0092 0
+cr 11 -0.827871 0.048045 -0.558799 -0.008099
+cp 12 -26.6742 0 0
+cr 13 0 0 0 1
+cp 13 -14.5781 0.035 0
+cp 15 -33.9664 0.0095 0
+cp 21 4.5362 12.4119 58.9026
+cp 26 3.957 9.3438 11.125
+anim 7 @holster_seq 30 16 0 74304 90
+ar 6 7 9 10 12 14 15 16 30
+ap 14 16 30
+cr 0 0.499999 0.499999 0.499999 0.500004
+cp 0 0 0 -206
+cp 7 26.6743 0 0
+cr 8 0 0 0 1
+cp 8 14.5781 -0.0349 0
+cp 9 30.954 -0.0347 0
+cp 10 33.9661 -0.0092 0
+cr 11 -0.827871 0.048045 -0.558799 -0.008099
+cp 12 -26.6742 0 0
+cr 13 0 0 0 1
+cp 13 -14.5703 0.035 0
+cp 15 -33.9664 0.0095 0
+cp 26 3.957 9.3438 11.1172
+anim 8 @raise_seq 30 17 0 75744 90
+ar 6 7 9 10 12 14 15 16 30
+ap 14 16 30
+cr 0 0.499999 0.499999 0.499999 0.500004
+cp 0 0 0 -206
+cp 7 26.6743 0 0
+cr 8 0 0 0 1
+cp 8 14.5703 -0.0349 0
+cp 9 30.954 -0.0347 0
+cp 10 33.9661 -0.0092 0
+cr 11 -0.827871 0.048045 -0.558799 -0.008099
+cp 12 -26.6742 0 0
+cr 13 0 0 0 1
+cp 13 -14.5703 0.035 0
+cp 15 -33.9664 0.0095 0
+cp 26 3.957 9.3438 11.125
+anim 9 @raise_frommelee_seq 30 17 0 77274 90
+ar 6 7 9 10 12 14 15 16 30
+ap 14 16 30
+cr 0 0.499999 0.499999 0.499999 0.500004
+cp 0 0 0 -206
+cp 7 26.6743 0 0
+cr 8 0 0 0 1
+cp 8 14.5703 -0.0349 0
+cp 9 30.954 -0.0347 0
+cp 10 33.9661 -0.0092 0
+cr 11 -0.827871 0.048045 -0.558799 -0.008099
+cp 12 -26.6742 0 0
+cr 13 0 0 0 1
+cp 13 -14.5703 0.035 0
+cp 15 -33.9664 0.0095 0
+cp 26 3.957 9.3438 11.125
+anim 10 @melee_seq 30 25 0 78804 106
+ar 6 7 9 10 11 12 14 15 16 30 31
+ap 14 16 30
+cr 0 0.499999 0.499999 0.499999 0.500004
+cp 0 0 0 -206
+cp 7 26.6743 0 0
+cr 8 0 0 0 1
+cp 8 14.5781 -0.0349 0
+cp 9 30.954 -0.0347 0
+cp 10 33.9661 -0.0092 0
+cp 12 -26.6742 0 0
+cr 13 0 0 0 1
+cp 13 -14.5781 0.035 0
+cp 15 -33.9664 0.0095 0
+cp 21 2.9883 14.8047 62.6875
+cp 22 4.0664 14.8047 16.3906
+cp 23 3.1348 11.8438 -16.6406
+cp 26 3.957 9.3438 11.1172
+anim 11 @sprint_seq 30 26 1 81454 90
+ar 7 9 10 12 14 15 16 30 31
+ap 14 16 30
+cr 0 0.499999 0.499999 0.499999 0.500004
+cp 0 0 0 -206
+cr 6 0.115078 -0.184121 -0.055806 0.974547
+cp 7 26.6743 0 0
+cr 8 0 0 0 1
+cp 8 14.5703 -0.0349 0
+cp 9 30.954 -0.0347 0
+cp 10 33.9661 -0.0092 0
+cr 11 -0.827871 0.048045 -0.558799 -0.008099
+cp 12 -26.6742 0 0
+cr 13 0 0 0 1
+cp 13 -14.5781 0.035 0
+cp 15 -33.9664 0.0095 0
+cp 26 3.957 9.3438 11.125
+anim 12 @sprintraise_seq 30 16 0 83794 98
+ar 6 7 9 10 12 14 15 16 30 31
+ap 14 16 30
+cr 0 0.499999 0.499999 0.499999 0.500004
+cp 0 0 0 -206
+cp 7 26.6743 0 0
+cr 8 0 0 0 1
+cp 8 14.5703 -0.0349 0
+cp 9 30.954 -0.0347 0
+cp 10 33.9661 -0.0092 0
+cr 11 -0.827871 0.048045 -0.558799 -0.008099
+cp 12 -26.6742 0 0
+cr 13 0 0 0 1
+cp 13 -14.5781 0.035 0
+cp 15 -33.9664 0.0095 0
+cp 26 3.9551 9.3438 11.1172
+anim 13 @sprintholster_seq 30 16 0 85362 90
+ar 6 7 10 12 14 15 16 30 31
+ap 14 16 30
+cr 0 0.499999 0.499999 0.499999 0.500004
+cp 0 0 0 -206
+cp 7 26.6743 0 0
+cr 8 0 0 0 1
+cp 8 14.5703 -0.0349 0
+cr 9 0.000098 0 -0.000645 1
+cp 9 30.9531 -0.0364 0
+cp 10 33.9661 -0.0092 0
+cr 11 -0.827871 0.048045 -0.558799 -0.008099
+cp 12 -26.6742 0 0
+cr 13 0 0 0 1
+cp 13 -14.5781 0.035 0
+cp 15 -33.9664 0.0095 0
+cp 26 3.9551 9.3438 11.1172
+# seq <i> <name> <activity or -> <flags> <grid w> <grid h> <pose param 0 or -> <pose param 1 or -> <start0> <end0> <start1> <end1> <fade in> <fade out> <anims, grid row by row>
+#   ev <cycle> <event> <options> / sw <per-bone weights> (layered sequences)
+seq 0 idle_seq ACT_VM_IDLE 21 2 1 ads_blend - 0 1 0 0 0.2 0.2 0 1
+seq 1 attack_seq ACT_VM_PRIMARYATTACK 20 2 1 ads_blend - 0 1 0 0 0.05 0.2 2 3
+ev 0 AE_CL_VSCRIPT_CALLBACK muzzle_flash
+ev 0 AE_CL_VSCRIPT_CALLBACK shell_eject
+ev 0.1333 AE_CL_VSCRIPT_CALLBACK ammo_update
+seq 2 reload_seq ACT_VM_RELOAD 0 1 1 - - 0 0 0 0 0.2 0.2 4
+ev 0.1042 AE_WPN_RELOAD_MILESTONE_1
+ev 0.4722 AE_WPN_RELOAD_MILESTONE_2
+ev 0.7361 AE_WPN_RELOAD_MILESTONE_3
+ev 0.1736 AE_WPN_CLIPBODYGROUP_HIDE
+ev 0.3472 AE_WPN_CLIPBODYGROUP_SHOW
+ev 0.0139 AE_WPN_RUMBLE reload_titan_small
+ev 0.1042 AE_WPN_RUMBLE reload_titan_small
+ev 0 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt1
+ev 0.0764 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt2
+ev 0.1458 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt3
+ev 0.2986 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt4
+ev 0.4306 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt5
+ev 0.4722 AE_WPN_RUMBLE reload_titan_large
+ev 0.5069 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt6
+ev 0.6806 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt7
+ev 0.6944 AE_WPN_RUMBLE reload_titan_small
+ev 0.8125 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt8
+ev 0.8611 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt9
+ev 0.9375 AE_WPN_FILLAMMO
+ev 0.9375 AE_WPN_RUMBLE reload_titan_small
+ev 0.2917 AE_CL_VSCRIPT_CALLBACK ammo_full
+ev 0.9444 AE_WPN_READYTOFIRE
+seq 3 reload_empty_seq ACT_VM_RELOADEMPTY 0 1 1 - - 0 0 0 0 0.2 0.2 5
+ev 0.1042 AE_WPN_RELOAD_MILESTONE_1
+ev 0.4722 AE_WPN_RELOAD_MILESTONE_2
+ev 0.7361 AE_WPN_RELOAD_MILESTONE_3
+ev 0.1736 AE_WPN_CLIPBODYGROUP_HIDE
+ev 0.3472 AE_WPN_CLIPBODYGROUP_SHOW
+ev 0.0139 AE_WPN_RUMBLE reload_titan_small
+ev 0.1042 AE_WPN_RUMBLE reload_titan_small
+ev 0 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt1
+ev 0.0764 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt2
+ev 0.1458 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt3
+ev 0.2986 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt4
+ev 0.4444 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt5
+ev 0.4722 AE_WPN_RUMBLE reload_titan_large
+ev 0.5069 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt6
+ev 0.6806 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt7
+ev 0.6944 AE_WPN_RUMBLE reload_titan_small
+ev 0.8125 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt8
+ev 0.8611 AE_CL_PLAYSOUND Wpn_XO16_1p_Reload_Pt9
+ev 0.9375 AE_WPN_RUMBLE reload_titan_small
+ev 0.9375 AE_WPN_FILLAMMO
+ev 0.2917 AE_CL_VSCRIPT_CALLBACK ammo_full
+ev 0.9444 AE_WPN_READYTOFIRE
+seq 4 draw_seq ACT_VM_DRAW 0 1 1 - - 0 0 0 0 0.2 0.2 6
+ev 0.3667 AE_WPN_READYTOFIRE
+ev 0 AE_CL_PLAYSOUND titan_weapon_raise
+seq 5 holster_seq ACT_VM_HOLSTER 0 1 1 - - 0 0 0 0 0.2 0.2 7
+seq 6 raise_seq ACT_VM_RAISE 0 1 1 - - 0 0 0 0 0.2 0.2 8
+ev 0 AE_CL_PLAYSOUND titan_weapon_raise
+ev 0.625 AE_WPN_READYTOFIRE
+seq 7 sprint_seq ACT_VM_SPRINT 1 1 1 - - 0 0 0 0 0.2 0.2 11
+seq 8 sprintraise_seq ACT_VM_RAISE_FROM_SPRINT 0 1 1 - - 0 0 0 0 0.2 0.2 12
+ev 0 AE_CL_PLAYSOUND titan_weapon_sprintraise
+ev 0.6667 AE_WPN_READYTOFIRE
+seq 9 sprintholster_seq ACT_VM_HOLSTER_FROM_SPRINT 0 1 1 - - 0 0 0 0 0.2 0.2 13
+ev 0 AE_CL_PLAYSOUND titan_weapon_lower_short_1P
+seq 10 melee_seq ACT_VM_MELEE_ATTACK1 2 1 1 - - 0 0 0 0 0.2 0.2 10
+ev 0.4167 AE_MELEE_ATTACK
+ev 0.4583 AE_MELEE_ATTACK
+ev 0.5 AE_MELEE_ATTACK
+ev 0.5417 AE_MELEE_ATTACK
+ev 0.5833 AE_MELEE_ATTACK
+seq 11 raise_frommelee_seq ACT_VM_RAISE_FROM_MELEE 0 1 1 - - 0 0 0 0 0.2 0.2 9
+end
