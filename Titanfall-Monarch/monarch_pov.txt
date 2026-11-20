@@ -1,12 +1,9 @@
-titan 1 32 24 14 12
+titan 1 32 21 14 12
 # models/weapons/titan_xo16_shorty/atpov_xo16shorty.mdl (Titanfall 2 - Titans addon), exported for Starfall. Indices are 0-based.
 # mat <i> <png> <texture path in the game>
 mat 1 monarch_pov_1.png materials/models/weapons_r2/xo16_shorty_titan/xo16_shorty_titan_col.vtf
 mat 3 monarch_pov_3.png materials/models/weapons_r2/xo16_a2_titan/xo16_a2_titan_col.vtf
-mat 5 monarch_pov_5.png materials/models/titans/cockpit/atlas/titan_cockpit_col.vtf
-mat 6 monarch_pov_6.png materials/models/titans/cockpit/atlas/cockpit_screen_col.vtf
-mat 8 monarch_pov_8.png materials/models/titans/cockpit/atlas/ajax_cockpit_console_pov_col.vtf
-mat 10 monarch_pov_10.png materials/models/titans_r2/medium_vanguard/warpaint/warpaint_01/t_m_vanguard_prime_warpaint_skin01_col.vtf
+mat 5 monarch_pov_5.png materials/models/titans_r2/medium_vanguard/warpaint/warpaint_01/t_m_vanguard_prime_warpaint_skin01_col.vtf
 # bone <i> <parent> <name> <rest pos xyz> <rest quat xyzw> <poseToBone 3x4 row-major>
 bone 0 -1 jx_c_delta 0 0 0 0 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0
 bone 1 0 jx_c_pov 0 205.4121 0 0 0 0 1 1 0 0 0 0 1 0 -205.41214 0 0 1 0
@@ -41,14 +38,14 @@ bone 29 28 def_c_magazine_grip_near_2 5.9806 -4.8012 1.6958 0 0 0 1 1 0 0 -10.32
 bone 30 -1 def_c_magazine 7.5096 -6.3559 31.496 0 0 0 1 1 0 0 -7.509586 0 1 0 6.355854 0 0 1 -31.496
 bone 31 1 jx_c_camera 0 0 0 0 0 0 1 1 0 0 0 0 1 0 -205.41214 0 0 1 0
 # piece <i> <obj name> <triangles> <material> <n> <bone 1> <weight 1> ...: render matrix = sum of weight * S(bone), S = boneToModel * poseToBone
-piece 0 p0 722 10 1 6 1
-piece 1 p1 1816 10 1 7 1
-piece 2 p2 1622 10 1 9 1
-piece 3 p3 1930 10 1 10 1
-piece 4 p4 722 10 1 11 1
-piece 5 p5 1816 10 1 12 1
-piece 6 p6 1622 10 1 14 1
-piece 7 p7 1930 10 1 15 1
+piece 0 p0 722 5 1 6 1
+piece 1 p1 1816 5 1 7 1
+piece 2 p2 1622 5 1 9 1
+piece 3 p3 1930 5 1 10 1
+piece 4 p4 722 5 1 11 1
+piece 5 p5 1816 5 1 12 1
+piece 6 p6 1622 5 1 14 1
+piece 7 p7 1930 5 1 15 1
 piece 8 p8 14190 1 1 18 1
 piece 9 p9 218 1 1 19 1
 piece 10 p10 1778 1 1 20 1
@@ -62,9 +59,6 @@ piece 17 p17 176 1 1 27 1
 piece 18 p18 1141 1 1 28 1
 piece 19 p19 518 1 1 29 1
 piece 20 p20 1622 3 1 30 1
-piece 21 p21 2130 5 1 31 1
-piece 22 p22 576 6 1 31 1
-piece 23 p23 10793 8 1 31 1
 # mag <piece> <centre xyz, bind pose>: the gun's magazine (hidden and dropped on reload)
 # att <name> <bone> <3x4 matrix in bone space, row-major>
 att CAMERA_BASE 1 0 1 0 0 0 0 1 0 1 0 0 0
