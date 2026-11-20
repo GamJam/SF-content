@@ -1,4 +1,5 @@
 titan 1 55 60 84 43
+build 1795128782
 # models/titans/medium/titan_medium_vanguard.mdl (Titanfall 2 - Titans addon), exported for Starfall. Indices are 0-based.
 # mat <i> <png> <texture path in the game>
 mat 0 monarch_0.png materials/models/titans_r2/medium_vanguard/warpaint/warpaint_01/t_m_vanguard_prime_warpaint_skin01_col.vtf

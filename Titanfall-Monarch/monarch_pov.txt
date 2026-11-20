@@ -1,4 +1,5 @@
 titan 1 32 21 14 12
+build 1795128782
 # models/weapons/titan_xo16_shorty/atpov_xo16shorty.mdl (Titanfall 2 - Titans addon), exported for Starfall. Indices are 0-based.
 # mat <i> <png> <texture path in the game>
 mat 1 monarch_pov_1.png materials/models/weapons_r2/xo16_shorty_titan/xo16_shorty_titan_col.vtf
