@@ -1,0 +1,3 @@
+# Starfall streams these straight from raw.githubusercontent.com, so keep them out of Git LFS
+# (LFS files are served there as a text pointer, not the audio).
+*.mp3 !filter !diff !merge -text
