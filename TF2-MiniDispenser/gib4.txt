@@ -1,0 +1,4 @@
+model gib4
+piece p0 0 0 0 mini_dispenser mini_dispenser_blue 348
+bg 0 dispenser
+bone 0 -1 gib4 0 0 0 0 90 90 0 0 0 0.5 0.5 0.5 0.5 0 0 0 0 90 90
